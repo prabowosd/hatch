@@ -91,6 +91,18 @@ HATCH_LOCAL=1 tests/integration.sh libhatch.so            # the OpenLiteSpeed in
 
 CI runs all of them on x86_64 and aarch64: OpenLiteSpeed 1.8 (official image), 1.9 on AlmaLinux 10 (LiteSpeed RPM), and CyberPanel's core built from `build/CyberPanelfile`.
 
+## Troubleshooting
+
+When the module loads but a rule does not apply, create `/usr/local/lsws/conf/hatch.debug` and restart OpenLiteSpeed. hatch then logs, per request, what the server handed it: the URI, the doc root, the resolved file path and how many `.htaccess` files apply.
+
+```sh
+sudo touch /usr/local/lsws/conf/hatch.debug
+sudo /usr/local/lsws/bin/lswsctrl restart
+tail -f /usr/local/lsws/logs/error.log | grep '\[hatch\]'
+```
+
+The check runs once per worker thread, so the restart is required after creating or removing the file. Entries are written at WARN level to the vhost error log, so an `errorlog` block with `logLevel ERROR` will suppress them. Remove the file and restart when done, since an active trace writes several lines per request.
+
 ## License
 
 GPL-3.0-or-later, the same as OpenLiteSpeed. hatch is an independent project and is not affiliated with LiteSpeed Technologies or CyberPanel.

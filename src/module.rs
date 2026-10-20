@@ -133,7 +133,7 @@ fn evaluate(s: *const lsi_session_t) -> Option<Decision> {
     let api = api()?;
     let uri = read(api.get_req_uri, s);
     let root = doc_root(api, s);
-    // CyberPanel's OpenLiteSpeed build answers get_uri_file_path with an empty path, so fall back to the docroot.
+    // get_uri_file_path returns nonzero when it cannot map the URI, so fall back to the docroot.
     let path = uri.as_deref().and_then(|u| file_path(api, s, u)).filter(|p| !p.as_os_str().is_empty())
         .or_else(|| Some(map_uri(root.as_deref()?, uri.as_deref()?)?));
     trace(s, || format!("uri={uri:?} doc_root={root:?} file={path:?}"));
