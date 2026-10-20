@@ -1,5 +1,7 @@
 # hatch
 
+[![build](https://github.com/prabowosd/hatch/actions/workflows/build.yml/badge.svg)](https://github.com/prabowosd/hatch/actions/workflows/build.yml)
+
 Apache `.htaccess` compatibility for OpenLiteSpeed, as an open source module written in Rust.
 
 OpenLiteSpeed reads `RewriteRule` from `.htaccess` on its own, but ignores everything else (`Header`, `Redirect`, `Require`, `<FilesMatch>` and friends). hatch loads into OpenLiteSpeed and applies those directives per request, the way Apache does. Edits take effect on the next request; no restart.

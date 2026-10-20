@@ -1,0 +1,82 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    # glibc 2.34: the built module loads on RHEL/Alma/Rocky 9, Ubuntu 22.04 and newer.
+    container: almalinux:9
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          dnf -y install gcc clang-devel git
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Unit tests
+        run: cargo test --locked
+      - name: Build
+        run: |
+          cargo build --release --locked
+          cp target/release/libhatch.so hatch-${{ matrix.arch }}-linux-gnu.so
+          objdump -T hatch-${{ matrix.arch }}-linux-gnu.so | grep -oE 'GLIBC_[0-9.]+' | sort -Vu | tail -1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hatch-${{ matrix.arch }}
+          path: hatch-${{ matrix.arch }}-linux-gnu.so
+
+  integration:
+    name: integration ${{ matrix.arch }}
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: hatch-${{ matrix.arch }}
+      - name: Real OpenLiteSpeed
+        run: bash tests/integration.sh hatch-${{ matrix.arch }}-linux-gnu.so
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: integration
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Checksums
+        run: sha256sum hatch-*-linux-gnu.so > SHA256SUMS && cat SHA256SUMS
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" hatch-*-linux-gnu.so SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --title "hatch $GITHUB_REF_NAME" --generate-notes
