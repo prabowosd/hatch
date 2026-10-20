@@ -107,12 +107,25 @@ fn file_path(api: &lsi_api_t, s: *const lsi_session_t, uri: &str) -> Option<Path
     })
 }
 
+thread_local! {
+    static DEBUG: bool = Path::new("/usr/local/lsws/conf/hatch.debug").exists();
+}
+
+/// Off unless /usr/local/lsws/conf/hatch.debug exists; logs what the server hands hatch.
+fn trace(s: *const lsi_session_t, text: impl FnOnce() -> String) {
+    if DEBUG.with(|d| *d) {
+        log(s, LSI_LOG_LEVEL_LSI_LOG_WARN, &format!("debug: {}", text()));
+    }
+}
+
 /// The decision for this request, or None when no .htaccess applies.
 fn evaluate(s: *const lsi_session_t) -> Option<Decision> {
     let api = api()?;
-    let uri = read(api.get_req_uri, s)?;
-    let root = doc_root(api, s)?;
-    let path = file_path(api, s, &uri)?;
+    let uri = read(api.get_req_uri, s);
+    let root = doc_root(api, s);
+    let path = uri.as_deref().and_then(|u| file_path(api, s, u));
+    trace(s, || format!("uri={uri:?} doc_root={root:?} file={path:?}"));
+    let (uri, root, path) = (uri?, root?, path?);
     let rel = path.strip_prefix(&root).ok()?;
     let is_dir = uri.ends_with('/') || path.is_dir();
     let (folders, file_name) = if is_dir {
@@ -132,6 +145,7 @@ fn evaluate(s: *const lsi_session_t) -> Option<Decision> {
             chain.push(r);
         }
     }
+    trace(s, || format!("{} .htaccess file(s) apply to {uri}", chain.len()));
     if chain.is_empty() {
         return None;
     }
