@@ -118,12 +118,30 @@ fn trace(s: *const lsi_session_t, text: impl FnOnce() -> String) {
     }
 }
 
+/// The file a URI names under the docroot. Rejects anything that is not a plain path inside it.
+fn map_uri(root: &Path, uri: &str) -> Option<PathBuf> {
+    let clean = uri.split(['?', '#']).next().unwrap_or("");
+    if !clean.starts_with('/') || clean.contains('\0') {
+        return None;
+    }
+    let mut path = root.to_path_buf();
+    for part in clean.split('/').filter(|p| !p.is_empty() && *p != ".") {
+        if part == ".." {
+            return None;
+        }
+        path.push(part);
+    }
+    Some(path)
+}
+
 /// The decision for this request, or None when no .htaccess applies.
 fn evaluate(s: *const lsi_session_t) -> Option<Decision> {
     let api = api()?;
     let uri = read(api.get_req_uri, s);
     let root = doc_root(api, s);
-    let path = uri.as_deref().and_then(|u| file_path(api, s, u));
+    // CyberPanel's OpenLiteSpeed build answers get_uri_file_path with an empty path, so fall back to the docroot.
+    let path = uri.as_deref().and_then(|u| file_path(api, s, u)).filter(|p| !p.as_os_str().is_empty())
+        .or_else(|| Some(map_uri(root.as_deref()?, uri.as_deref()?)?));
     trace(s, || format!("uri={uri:?} doc_root={root:?} file={path:?}"));
     let (uri, root, path) = (uri?, root?, path?);
     let rel = path.strip_prefix(&root).ok()?;
@@ -296,6 +314,18 @@ pub static mut hatch: lsi_module_t = lsi_module_t {
 mod tests {
     use super::http_date;
     use std::time::{Duration, UNIX_EPOCH};
+
+    #[test]
+    fn uri_mapping_stays_inside_the_docroot() {
+        use super::map_uri;
+        use std::path::{Path, PathBuf};
+        let root = Path::new("/home/site/public_html");
+        assert_eq!(map_uri(root, "/a/b.css?x=1"), Some(PathBuf::from("/home/site/public_html/a/b.css")));
+        assert_eq!(map_uri(root, "/"), Some(PathBuf::from("/home/site/public_html")));
+        assert_eq!(map_uri(root, "//a/./b/"), Some(PathBuf::from("/home/site/public_html/a/b")));
+        assert_eq!(map_uri(root, "/a/../../etc/passwd"), None);
+        assert_eq!(map_uri(root, "relative"), None);
+    }
 
     #[test]
     fn http_dates() {
