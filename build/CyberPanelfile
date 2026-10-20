@@ -1,0 +1,13 @@
+# OpenLiteSpeed with CyberPanel's own core: a different lsi_api_t layout for testing.
+# Build: podman build --platform linux/amd64 -t hatch-cyberpanel -f build/CyberPanelfile build
+FROM docker.io/library/almalinux:9
+
+RUN dnf -y install libatomic procps-ng libaio && dnf clean all
+RUN curl -fsSL https://repo.litespeed.sh | bash && dnf -y install openlitespeed && dnf clean all
+# CyberPanel replaces the packaged binary with its own build (2.5.x, LSIAPI v1 plus three members).
+RUN curl -fsSL https://cyberpanel.net/openlitespeed-2.5.5-x86_64-rhel9 -o /tmp/cp-core \
+    && install -m 0755 /tmp/cp-core /usr/local/lsws/bin/openlitespeed \
+    && /usr/local/lsws/bin/openlitespeed -v | head -1 | grep -q 'LiteSpeed/2.5' \
+    && nm -D /usr/local/lsws/bin/openlitespeed | grep -q cyberpanel_lsi_api_abi_v1
+
+CMD ["sleep", "infinity"]

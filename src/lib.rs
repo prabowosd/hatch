@@ -1,4 +1,5 @@
 //! hatch: Apache .htaccess compatibility for OpenLiteSpeed.
+pub mod api;
 pub mod parse;
 pub mod rules;
 pub mod module;

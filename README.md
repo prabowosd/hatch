@@ -11,7 +11,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="license"></a>
 </p>
 
-> **CyberPanel:** v0.1.1 and older do not support CyberPanel's OpenLiteSpeed build (it uses a different module API layout). Do not install them on CyberPanel servers; CyberPanel support lands in v0.1.2.
+> **CyberPanel:** supported from v0.1.2. CyberPanel replaces OpenLiteSpeed with its own core (2.5.x) whose `lsi_api_t` carries three extra members; hatch detects that layout at load time. v0.1.1 and older crash the worker on the first request there, so upgrade before installing on a CyberPanel server.
 
 Apache `.htaccess` compatibility for OpenLiteSpeed, as an open source module written in Rust.
 
@@ -58,7 +58,7 @@ sudo bash install.sh --status
 sudo bash install.sh --uninstall
 ```
 
-On CyberPanel servers the bundled `cyberpanel_ols` module needs a paid license and stays inert without one; hatch runs next to it.
+CyberPanel ships its own OpenLiteSpeed core. hatch recognises it by the `cyberpanel_lsi_api_abi_v1` symbol the core exports and reads the table with that layout. On a core with an unknown marker it logs one line and stays idle instead of guessing. The bundled `cyberpanel_ols` module needs a paid license and stays inert without one; hatch runs next to it.
 
 ## How it works
 
@@ -67,6 +67,7 @@ On CyberPanel servers the bundled `cyberpanel_ols` module needs a paid license a
 - Parsed files are cached per worker and re-read only when their mtime or size changes. Files over 256 KB are ignored.
 - Regexes use the `regex` crate, which runs in linear time, so a hostile pattern cannot stall a worker.
 - Header names, values and redirect targets are validated; anything that could inject a header or a `javascript:` redirect is dropped.
+- The server's function table is read once per worker. CyberPanel's core has a longer `lsi_api_t`, so hatch picks the layout from the core's ABI marker first and falls back to scanning the server binary.
 - Every hook runs inside `catch_unwind` and fails open: a bug in hatch skips the `.htaccess` rules for that request instead of taking the server down.
 
 ## Build
@@ -84,10 +85,11 @@ podman run --rm -v "$PWD":/src:Z hatch-build cargo build --release
 ```sh
 podman run --rm -v "$PWD":/src:Z hatch-build cargo test   # unit tests
 tests/integration.sh target/release/libhatch.so           # real OpenLiteSpeed in a container
+HATCH_CYBERPANEL=1 tests/integration.sh libhatch.so       # CyberPanel's OpenLiteSpeed core (x86_64)
 HATCH_LOCAL=1 tests/integration.sh libhatch.so            # the OpenLiteSpeed installed on this host
 ```
 
-CI runs both on x86_64 and aarch64: OpenLiteSpeed 1.8 (official image) and 1.9 on AlmaLinux 10 (LiteSpeed RPM).
+CI runs all of them on x86_64 and aarch64: OpenLiteSpeed 1.8 (official image), 1.9 on AlmaLinux 10 (LiteSpeed RPM), and CyberPanel's core built from `build/CyberPanelfile`.
 
 ## License
 
