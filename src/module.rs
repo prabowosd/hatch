@@ -200,6 +200,24 @@ fn remove_header(api: &lsi_api_t, s: *const lsi_session_t, name: &str) {
     }
 }
 
+/// Like mod_expires: a dynamic response that set its own Cache-Control or Expires keeps it.
+/// Static files have no app behind them, so .htaccess may replace the server default.
+fn app_set_cache(api: &lsi_api_t, s: *const lsi_session_t) -> bool {
+    // Handler type names come from the server: "static" for plain files, "lsapi", "proxy" and so on otherwise.
+    let is_static = api.get_req_handler_type.is_none_or(|f| {
+        let ptr = unsafe { f(s) };
+        ptr.is_null() || unsafe { std::ffi::CStr::from_ptr(ptr) }.to_bytes().eq_ignore_ascii_case(b"static")
+    });
+    if is_static {
+        return false;
+    }
+    let Some(get) = api.get_resp_header else { return false };
+    [LSI_RESP_HEADER_ID_LSI_RSPHDR_CACHE_CTRL, LSI_RESP_HEADER_ID_LSI_RSPHDR_EXPIRES].iter().any(|&id| {
+        let mut iov = iovec { iov_base: std::ptr::null_mut(), iov_len: 0 };
+        unsafe { get(s, id, std::ptr::null(), 0, &mut iov, 1) > 0 }
+    })
+}
+
 fn set_header(api: &lsi_api_t, s: *const lsi_session_t, name: &str, value: &str, op: u32) {
     if let Some(set) = api.set_resp_header {
         unsafe {
@@ -212,6 +230,13 @@ unsafe extern "C" fn on_send_resp_header(param: *mut lsi_param_t) -> c_int {
     guard(|| {
         let s = unsafe { (*param).session };
         let (Some(api), Some(d)) = (api(), evaluate(s)) else { return LSI_RETCODE_LSI_OK as c_int };
+        // mod_expires runs before mod_headers, so an explicit Header set Cache-Control wins.
+        if let Some(secs) = d.expires.seconds_for(&content_type(api, s)).filter(|_| !app_set_cache(api, s)) {
+            remove_header(api, s, "Cache-Control");
+            remove_header(api, s, "Expires");
+            set_header(api, s, "Cache-Control", &format!("max-age={secs}"), LSI_HEADER_OP_LSI_HEADEROP_SET);
+            set_header(api, s, "Expires", &http_date(SystemTime::now() + Duration::from_secs(secs)), LSI_HEADER_OP_LSI_HEADEROP_SET);
+        }
         for h in &d.headers {
             match h.action {
                 HeaderAction::Unset => remove_header(api, s, &h.name),
@@ -224,12 +249,6 @@ unsafe extern "C" fn on_send_resp_header(param: *mut lsi_param_t) -> c_int {
                 HeaderAction::Merge => set_header(api, s, &h.name, &h.value, LSI_HEADER_OP_LSI_HEADEROP_MERGE),
                 HeaderAction::Add => set_header(api, s, &h.name, &h.value, LSI_HEADER_OP_LSI_HEADEROP_ADD),
             }
-        }
-        if let Some(secs) = d.expires.seconds_for(&content_type(api, s)) {
-            remove_header(api, s, "Cache-Control");
-            remove_header(api, s, "Expires");
-            set_header(api, s, "Cache-Control", &format!("max-age={secs}"), LSI_HEADER_OP_LSI_HEADEROP_SET);
-            set_header(api, s, "Expires", &http_date(SystemTime::now() + Duration::from_secs(secs)), LSI_HEADER_OP_LSI_HEADEROP_SET);
         }
         LSI_RETCODE_LSI_OK as c_int
     })

@@ -77,6 +77,13 @@ check "Redirect gone"                    '410'                              "$(c
 check "native RewriteRule still works"   'page'                             "$(curl -s "$B/rw")"
 check "broken .htaccess is skipped"      '200'                              "$(code /broken/)"
 
+if [ "$(curl -s "$B/hx/plain.php")" = plain ]; then
+  check "PHP keeps its own Cache-Control"  'cache-control: no-store, private' "$(headers /hx/nocache.php)"
+  check "PHP without one gets the expiry" 'cache-control: max-age=2592000'   "$(headers /hx/plain.php)"
+else
+  echo "  skip  PHP checks (no PHP handler on this server)"
+fi
+
 "$ENGINE" exec "$NAME" bash -c 'sed -i "s/X-Hatch-Hx \"yes\"/X-Hatch-Hx \"changed\"/" /usr/local/lsws/Example/html/hx/.htaccess'
 check "edits apply without a restart"    'x-hatch-hx: changed'              "$(headers /hx/)"
 

@@ -7,3 +7,4 @@ Header set X-Hatch-Hx "yes"
 </Files>
 ExpiresActive On
 ExpiresByType image/png "access plus 1 day"
+ExpiresDefault "access plus 1 month"

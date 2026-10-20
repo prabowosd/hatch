@@ -26,7 +26,7 @@ OpenLiteSpeed reads `RewriteRule` from `.htaccess` on its own, but ignores every
 | `Require all granted\|denied`, `Require ip`, `Require not ip` | Apache 2.4 semantics. |
 | `<Files>`, `<Files ~>`, `<FilesMatch>` | Applied to the requested file name. |
 | `<IfModule>` | Contents apply; `<IfModule !...>` fallbacks are skipped. |
-| `ExpiresActive`, `ExpiresDefault`, `ExpiresByType` | `access plus N unit` and `A<seconds>` forms, `type/*` wildcards. |
+| `ExpiresActive`, `ExpiresDefault`, `ExpiresByType` | `access plus N unit` and `A<seconds>` forms, `type/*` wildcards. Like mod_expires, a PHP or proxied response that sets its own `Cache-Control` or `Expires` keeps it; `Header set Cache-Control` still wins over expiry. |
 | `RewriteEngine`, `RewriteRule`, `RewriteCond`, `RewriteBase` | Left to OpenLiteSpeed, untouched. |
 
 Next (v0.2): Basic Auth (`AuthType`, `AuthUserFile`, `Require valid-user`), `ErrorDocument`, `php_value`/`php_flag`, `DirectoryIndex`, `Header ... env=`.
