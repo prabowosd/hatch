@@ -1,29 +1,44 @@
 #!/usr/bin/env bash
-# End to end test: load hatch.so into a real OpenLiteSpeed container and probe it.
-#   tests/integration.sh [path/to/libhatch.so]
-#   HATCH_LOCAL=1 tests/integration.sh hatch.so   use the OpenLiteSpeed installed on this host
+# End to end test: load hatch.so into a real OpenLiteSpeed and probe it.
+#   tests/integration.sh [path/to/libhatch.so]        official OpenLiteSpeed image
+#   HATCH_CYBERPANEL=1 tests/integration.sh lib.so    CyberPanel's own OpenLiteSpeed core
+#   HATCH_LOCAL=1 tests/integration.sh lib.so         the OpenLiteSpeed installed on this host
 set -euo pipefail
 
 SO="${1:-target/release/libhatch.so}"
 IMAGE="${OLS_IMAGE:-docker.io/litespeedtech/openlitespeed:1.8.3-lsphp83}"
+CP_IMAGE="${CP_IMAGE:-hatch-cyberpanel}"
 NAME="hatch-it-$$"
 PORT="${PORT:-18090}"
 ENGINE="$(command -v podman || command -v docker || true)"
 B="http://127.0.0.1:$PORT"
 FAILED=0
+LABEL="$IMAGE"
 
 if [ "${HATCH_LOCAL:-0}" = 1 ]; then
   # Same commands, run on this host instead of inside a container.
   run() { [ "$1" = exec ] && shift 2 && "$@"; }
   ENGINE=run
   B="http://127.0.0.1:8088"
+  LABEL="$(head -1 /etc/os-release | cut -d= -f2)"
   cp "$SO" /usr/local/lsws/modules/hatch.so
   rm -rf /tmp/site && cp -a tests/site /tmp/site
 else
   cleanup() { "$ENGINE" rm -f "$NAME" >/dev/null 2>&1 || true; }
   trap cleanup EXIT
-  "$ENGINE" run -d --name "$NAME" -p "$PORT:8088" "$IMAGE" >/dev/null
-  sleep 5
+  if [ "${HATCH_CYBERPANEL:-0}" = 1 ]; then
+    # build/CyberPanelfile swaps in CyberPanel's own core; --build rebuilds it first.
+    LABEL="CyberPanel OpenLiteSpeed core"
+    if [ "${HATCH_BUILD_CYBERPANEL:-0}" = 1 ]; then
+      "$ENGINE" build --platform linux/amd64 -t "$CP_IMAGE" -f build/CyberPanelfile build >/dev/null
+    fi
+    "$ENGINE" run -d --name "$NAME" -p "$PORT:8088" --platform linux/amd64 "$CP_IMAGE" >/dev/null
+    sleep 3
+    "$ENGINE" exec "$NAME" bash -c '/usr/local/lsws/bin/openlitespeed -v | head -1 | grep -q "LiteSpeed/2.5"'
+  else
+    "$ENGINE" run -d --name "$NAME" -p "$PORT:8088" "$IMAGE" >/dev/null
+    sleep 5
+  fi
   "$ENGINE" cp "$SO" "$NAME:/usr/local/lsws/modules/hatch.so"
   "$ENGINE" cp tests/site "$NAME:/tmp/site"
 fi
@@ -63,7 +78,7 @@ headers() { curl -s -D - -o /dev/null "$B$1" | tr -d '\r' | tr 'A-Z' 'a-z'; }
 code() { curl -s -o /dev/null -w '%{http_code}' "$B$1"; }
 location() { curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "$B$1"; }
 
-echo "hatch integration ($([ "${HATCH_LOCAL:-0}" = 1 ] && head -1 /etc/os-release | cut -d= -f2 || echo "$IMAGE"))"
+echo "hatch integration ($LABEL)"
 check "Header set at the docroot"        'x-frame-options: sameorigin'      "$(headers /)"
 check "Header unset"                     'x-hatch: root'                    "$(headers /)"
 check "child folder adds headers"        'x-hatch-hx: yes'                  "$(headers /hx/)"
@@ -87,7 +102,9 @@ fi
 "$ENGINE" exec "$NAME" bash -c 'sed -i "s/X-Hatch-Hx \"yes\"/X-Hatch-Hx \"changed\"/" /usr/local/lsws/Example/html/hx/.htaccess'
 check "edits apply without a restart"    'x-hatch-hx: changed'              "$(headers /hx/)"
 
-if "$ENGINE" exec "$NAME" bash -c 'ls /tmp/lshttpd/bak_core 2>/dev/null | grep -q .'; then
-  echo "  FAIL  a core dump was written"; FAILED=1
-fi
+# A wrong LSIAPI layout used to recurse until the worker died, so a crash here is fatal.
+"$ENGINE" exec "$NAME" bash -c 'ls /tmp/lshttpd/bak_core 2>/dev/null | grep -q .' \
+  && { echo "  FAIL  a core dump was written"; FAILED=1; }
+"$ENGINE" exec "$NAME" bash -c 'grep -aq "signal=11" /usr/local/lsws/logs/error.log 2>/dev/null' \
+  && { echo "  FAIL  a worker died with SIGSEGV"; FAILED=1; }
 [ "$FAILED" = 0 ] && echo "all passed" || { echo "failures above"; exit 1; }

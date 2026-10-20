@@ -62,6 +62,19 @@ jobs:
       - name: Real OpenLiteSpeed
         run: bash tests/integration.sh hatch-${{ matrix.arch }}-linux-gnu.so
 
+  # CyberPanel ships its own OpenLiteSpeed core with a longer lsi_api_t. Its core is x86_64 only.
+  integration-cyberpanel:
+    name: integration x86_64 CyberPanel
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: hatch-x86_64
+      - name: CyberPanel OpenLiteSpeed core
+        run: HATCH_CYBERPANEL=1 HATCH_BUILD_CYBERPANEL=1 PORT=18094 bash tests/integration.sh hatch-x86_64-linux-gnu.so
+
   integration-el10:
     name: integration ${{ matrix.arch }} AlmaLinux 10
     needs: build
@@ -94,7 +107,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [integration, integration-el10]
+    needs: [integration, integration-el10, integration-cyberpanel]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

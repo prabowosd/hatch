@@ -58,7 +58,7 @@ do_status() {
   if has_block; then say "config: module hatch block present in $CONF"; else say "config: no module hatch block"; fi
   grep -a "\[hatch\] module v" "$LSWS/logs/error.log" 2>/dev/null | tail -1 | sed 's/^/[hatch] last load: /' || true
   if grep -qE '^module[[:space:]]+cyberpanel_ols' "$CONF"; then
-    say "note: cyberpanel_ols is also configured; it stays inert without its paid license"
+    say "note: CyberPanel's OpenLiteSpeed core detected; hatch reads its LSIAPI layout"
   fi
 }
 
@@ -111,12 +111,18 @@ do_install() {
 
   local started; started="$(date '+%Y-%m-%d %H:%M:%S')"
   if restart && loaded_since "$started"; then
-    say "installed: $(grep -a '\[hatch\] module v' "$LSWS/logs/error.log" | tail -1 | grep -oE 'module v[0-9.]+')"
-    say ".htaccess Header, Redirect, Require/Allow/Deny, Files and Expires directives are now applied"
-    return 0
+    local line; line="$(grep -a '\[hatch\] module v' "$LSWS/logs/error.log" | tail -1)"
+    if printf '%s' "$line" | grep -q idle; then
+      say "hatch cannot drive this OpenLiteSpeed build: $(printf '%s' "$line" | sed 's/.*idle: //')"
+      say "rolling back; nothing is left half-applied"
+    else
+      say "installed: $(printf '%s' "$line" | grep -oE 'module v[0-9.]+.*')"
+      say ".htaccess Header, Redirect, Require/Allow/Deny, Files and Expires directives are now applied"
+      return 0
+    fi
+  else
+    say "hatch did not load, rolling back"
   fi
-
-  say "hatch did not load, rolling back"
   cp -p "$BACKUP_DIR/httpd_config.conf" "$CONF"
   if [ -f "$BACKUP_DIR/hatch.so" ]; then cp -p "$BACKUP_DIR/hatch.so" "$MODULE"; else rm -f "$MODULE"; fi
   restart || true

@@ -3,6 +3,7 @@
 //! Every callback runs inside catch_unwind and fails open: a bug in hatch must
 //! never take the web server down, so an error just skips the .htaccess rules.
 
+use crate::api::{self, Api};
 use crate::ffi::*;
 use crate::parse::parse;
 use crate::rules::{decide, Decision, HeaderAction, Rules};
@@ -14,10 +15,6 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-extern "C" {
-    fn hatch_api() -> *const lsi_api_t;
-}
 
 const MAX_HTACCESS: u64 = 256 * 1024;
 const MAX_CACHE: usize = 4096;
@@ -34,15 +31,13 @@ thread_local! {
     static CACHE: RefCell<HashMap<PathBuf, Cached>> = RefCell::new(HashMap::new());
 }
 
-fn api() -> Option<&'static lsi_api_t> {
-    unsafe { hatch_api().as_ref() }
+fn api() -> Option<&'static Api> {
+    api::get().ok()
 }
 
 fn log(session: *const lsi_session_t, level: u32, text: &str) {
     if let (Some(api), Ok(msg)) = (api(), std::ffi::CString::new(format!("[hatch] {text}"))) {
-        if let Some(f) = api.log {
-            unsafe { f(session, level as c_int, c"%s\n".as_ptr(), msg.as_ptr()) };
-        }
+        unsafe { (api.log)(session, level as c_int, c"%s\n".as_ptr(), msg.as_ptr()) };
     }
 }
 
@@ -81,8 +76,7 @@ fn load(path: &Path, session: *const lsi_session_t) -> Option<Rc<Rules>> {
     rules
 }
 
-fn read(f: Option<unsafe extern "C" fn(*const lsi_session_t, *mut c_int) -> *const c_char>, s: *const lsi_session_t) -> Option<String> {
-    let f = f?;
+fn read(f: unsafe extern "C" fn(*const lsi_session_t, *mut c_int) -> *const c_char, s: *const lsi_session_t) -> Option<String> {
     let mut len: c_int = 0;
     let ptr = unsafe { f(s, &mut len) };
     if ptr.is_null() || len <= 0 {
@@ -92,15 +86,15 @@ fn read(f: Option<unsafe extern "C" fn(*const lsi_session_t, *mut c_int) -> *con
     std::str::from_utf8(bytes).ok().map(str::to_owned)
 }
 
-fn doc_root(api: &lsi_api_t, s: *const lsi_session_t) -> Option<PathBuf> {
+fn doc_root(api: &Api, s: *const lsi_session_t) -> Option<PathBuf> {
     let mut buf = [0u8; BUF];
-    let n = unsafe { api.get_req_var_by_id?(s, LSI_REQ_VARIABLE_LSI_VAR_DOC_ROOT as c_int, buf.as_mut_ptr() as *mut c_char, BUF as c_int) };
+    let n = unsafe { (api.get_req_var_by_id)(s, LSI_REQ_VARIABLE_LSI_VAR_DOC_ROOT as c_int, buf.as_mut_ptr() as *mut c_char, BUF as c_int) };
     (n > 0).then(|| PathBuf::from(String::from_utf8_lossy(&buf[..n as usize]).trim_end_matches('/').to_string()))
 }
 
-fn file_path(api: &lsi_api_t, s: *const lsi_session_t, uri: &str) -> Option<PathBuf> {
+fn file_path(api: &Api, s: *const lsi_session_t, uri: &str) -> Option<PathBuf> {
     let mut buf = [0u8; BUF];
-    let n = unsafe { api.get_uri_file_path?(s, uri.as_ptr() as *const c_char, uri.len() as c_int, buf.as_mut_ptr() as *mut c_char, BUF as c_int) };
+    let n = unsafe { (api.get_uri_file_path)(s, uri.as_ptr() as *const c_char, uri.len() as c_int, buf.as_mut_ptr() as *mut c_char, BUF as c_int) };
     (n == 0).then(|| {
         let end = buf.iter().position(|&b| b == 0).unwrap_or(BUF);
         PathBuf::from(String::from_utf8_lossy(&buf[..end]).to_string())
@@ -182,9 +176,7 @@ unsafe extern "C" fn on_uri_map(param: *mut lsi_param_t) -> c_int {
         let (Some(api), Some(d)) = (api(), evaluate(s)) else { return LSI_RETCODE_LSI_OK as c_int };
         if let Some((status, target)) = d.redirect {
             // Status, Location and an early end: the same path 410 takes, and it covers 308 too.
-            if let Some(code) = api.set_status_code {
-                unsafe { code(s, status as c_int) };
-            }
+            unsafe { (api.set_status_code)(s, status as c_int) };
             if let Some(t) = target {
                 set_header(api, s, "Location", &t, LSI_HEADER_OP_LSI_HEADEROP_SET);
             }
@@ -215,10 +207,9 @@ fn http_date(at: SystemTime) -> String {
     format!("{}, {:02} {} {} {:02}:{:02}:{:02} GMT", DAYS[(days % 7) as usize], day, MONTHS[(month - 1) as usize], year, rem / 3600, rem / 60 % 60, rem % 60)
 }
 
-fn content_type(api: &lsi_api_t, s: *const lsi_session_t) -> String {
-    let Some(get) = api.get_resp_header else { return String::new() };
+fn content_type(api: &Api, s: *const lsi_session_t) -> String {
     let mut iov = iovec { iov_base: std::ptr::null_mut(), iov_len: 0 };
-    let n = unsafe { get(s, LSI_RESP_HEADER_ID_LSI_RSPHDR_CONTENT_TYPE, std::ptr::null(), 0, &mut iov, 1) };
+    let n = unsafe { (api.get_resp_header)(s, LSI_RESP_HEADER_ID_LSI_RSPHDR_CONTENT_TYPE, std::ptr::null(), 0, &mut iov, 1) };
     if n < 1 || iov.iov_base.is_null() {
         return String::new();
     }
@@ -226,35 +217,28 @@ fn content_type(api: &lsi_api_t, s: *const lsi_session_t) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-fn remove_header(api: &lsi_api_t, s: *const lsi_session_t, name: &str) {
-    if let Some(remove) = api.remove_resp_header {
-        unsafe { remove(s, LSI_RESP_HEADER_ID_LSI_RSPHDR_UNKNOWN, name.as_ptr() as *const c_char, name.len() as c_int) };
-    }
+fn remove_header(api: &Api, s: *const lsi_session_t, name: &str) {
+    unsafe { (api.remove_resp_header)(s, LSI_RESP_HEADER_ID_LSI_RSPHDR_UNKNOWN, name.as_ptr() as *const c_char, name.len() as c_int) };
 }
 
 /// Like mod_expires: a dynamic response that set its own Cache-Control or Expires keeps it.
 /// Static files have no app behind them, so .htaccess may replace the server default.
-fn app_set_cache(api: &lsi_api_t, s: *const lsi_session_t) -> bool {
+fn app_set_cache(api: &Api, s: *const lsi_session_t) -> bool {
     // Handler type names come from the server: "static" for plain files, "lsapi", "proxy" and so on otherwise.
-    let is_static = api.get_req_handler_type.is_none_or(|f| {
-        let ptr = unsafe { f(s) };
-        ptr.is_null() || unsafe { std::ffi::CStr::from_ptr(ptr) }.to_bytes().eq_ignore_ascii_case(b"static")
-    });
+    let ptr = unsafe { (api.get_req_handler_type)(s) };
+    let is_static = ptr.is_null() || unsafe { std::ffi::CStr::from_ptr(ptr) }.to_bytes().eq_ignore_ascii_case(b"static");
     if is_static {
         return false;
     }
-    let Some(get) = api.get_resp_header else { return false };
     [LSI_RESP_HEADER_ID_LSI_RSPHDR_CACHE_CTRL, LSI_RESP_HEADER_ID_LSI_RSPHDR_EXPIRES].iter().any(|&id| {
         let mut iov = iovec { iov_base: std::ptr::null_mut(), iov_len: 0 };
-        unsafe { get(s, id, std::ptr::null(), 0, &mut iov, 1) > 0 }
+        unsafe { (api.get_resp_header)(s, id, std::ptr::null(), 0, &mut iov, 1) > 0 }
     })
 }
 
-fn set_header(api: &lsi_api_t, s: *const lsi_session_t, name: &str, value: &str, op: u32) {
-    if let Some(set) = api.set_resp_header {
-        unsafe {
-            set(s, LSI_RESP_HEADER_ID_LSI_RSPHDR_UNKNOWN, name.as_ptr() as *const c_char, name.len() as c_int, value.as_ptr() as *const c_char, value.len() as c_int, op as c_int);
-        }
+fn set_header(api: &Api, s: *const lsi_session_t, name: &str, value: &str, op: u32) {
+    unsafe {
+        (api.set_resp_header)(s, LSI_RESP_HEADER_ID_LSI_RSPHDR_UNKNOWN, name.as_ptr() as *const c_char, name.len() as c_int, value.as_ptr() as *const c_char, value.len() as c_int, op as c_int);
     }
 }
 
@@ -287,7 +271,14 @@ unsafe extern "C" fn on_send_resp_header(param: *mut lsi_param_t) -> c_int {
 }
 
 unsafe extern "C" fn init(_module: *mut lsi_module_t) -> c_int {
-    log(std::ptr::null(), LSI_LOG_LEVEL_LSI_LOG_INFO, concat!("module v", env!("CARGO_PKG_VERSION"), " loaded"));
+    match api::get() {
+        Ok(_) => log(
+            std::ptr::null(),
+            LSI_LOG_LEVEL_LSI_LOG_INFO,
+            &format!("module v{} loaded, {} LSIAPI layout", env!("CARGO_PKG_VERSION"), api::layout_name()),
+        ),
+        Err(e) => log(std::ptr::null(), LSI_LOG_LEVEL_LSI_LOG_WARN, &format!("module v{} idle: {}", env!("CARGO_PKG_VERSION"), e.describe())),
+    }
     LSI_RETCODE_LSI_OK as c_int
 }
 
