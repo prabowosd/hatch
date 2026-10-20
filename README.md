@@ -1,6 +1,15 @@
-# hatch
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-wordmark-dark.svg">
+    <img src="assets/logo-wordmark.svg" alt="hatch" width="420">
+  </picture>
+</p>
 
-[![build](https://github.com/prabowosd/hatch/actions/workflows/build.yml/badge.svg)](https://github.com/prabowosd/hatch/actions/workflows/build.yml)
+<p align="center">
+  <a href="https://github.com/prabowosd/hatch/actions/workflows/build.yml"><img src="https://github.com/prabowosd/hatch/actions/workflows/build.yml/badge.svg" alt="build"></a>
+  <a href="https://github.com/prabowosd/hatch/releases/latest"><img src="https://img.shields.io/github/v/release/prabowosd/hatch" alt="release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="license"></a>
+</p>
 
 Apache `.htaccess` compatibility for OpenLiteSpeed, as an open source module written in Rust.
 

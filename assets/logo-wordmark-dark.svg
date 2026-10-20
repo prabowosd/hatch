@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 128" width="520" height="128" role="img" aria-label="hatch">
+<title>hatch</title>
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#0EA5E9"/>
+    <stop offset="1" stop-color="#1E3A8A"/>
+  </linearGradient>
+</defs>
+<g>
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#bg)"/>
+  <circle cx="64" cy="64" r="52" fill="#E8F4FA"/>
+  <circle cx="106.50" cy="81.60" r="3.2" fill="#0B1220"/><circle cx="81.60" cy="106.50" r="3.2" fill="#0B1220"/><circle cx="46.40" cy="106.50" r="3.2" fill="#0B1220"/><circle cx="21.50" cy="81.60" r="3.2" fill="#0B1220"/><circle cx="21.50" cy="46.40" r="3.2" fill="#0B1220"/><circle cx="46.40" cy="21.50" r="3.2" fill="#0B1220"/><circle cx="81.60" cy="21.50" r="3.2" fill="#0B1220"/><circle cx="106.50" cy="46.40" r="3.2" fill="#0B1220"/>
+  <circle cx="64" cy="64" r="38" fill="#0B1220"/>
+  <circle cx="64" cy="64" r="31" fill="none" stroke="#38BDF8" stroke-width="2" opacity=".35"/>
+  <g stroke="#E8F4FA" stroke-width="5" stroke-linecap="round" fill="none">
+    <circle cx="64" cy="64" r="20"/>
+    <line x1="64" y1="64" x2="78.14" y2="78.14"/><line x1="64" y1="64" x2="49.86" y2="78.14"/><line x1="64" y1="64" x2="49.86" y2="49.86"/><line x1="64" y1="64" x2="78.14" y2="49.86"/>
+  </g>
+  <circle cx="64" cy="64" r="6" fill="#38BDF8"/>
+</g>
+<text x="148" y="80" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="72" font-weight="800" letter-spacing="-2" fill="#F8FAFC">hatch</text>
+<text x="151" y="108" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="17" font-weight="500" fill="#94A3B8">.htaccess for OpenLiteSpeed</text>
+</svg>
