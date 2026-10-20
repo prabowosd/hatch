@@ -11,6 +11,8 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="license"></a>
 </p>
 
+> **CyberPanel:** v0.1.1 and older do not support CyberPanel's OpenLiteSpeed build (it uses a different module API layout). Do not install them on CyberPanel servers; CyberPanel support lands in v0.1.2.
+
 Apache `.htaccess` compatibility for OpenLiteSpeed, as an open source module written in Rust.
 
 OpenLiteSpeed reads `RewriteRule` from `.htaccess` on its own, but ignores everything else (`Header`, `Redirect`, `Require`, `<FilesMatch>` and friends). hatch loads into OpenLiteSpeed and applies those directives per request, the way Apache does. Edits take effect on the next request; no restart.
