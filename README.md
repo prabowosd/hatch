@@ -30,7 +30,7 @@ Unsupported directives are logged once per file change and skipped; they never b
 curl -fsSL https://raw.githubusercontent.com/prabowosd/hatch/main/install.sh | sudo bash
 ```
 
-The installer checks the architecture and glibc (2.34+: RHEL/Alma/Rocky 9, Ubuntu 22.04+), verifies the release checksum, backs up `httpd_config.conf` and any previous module, adds
+The installer checks the architecture and glibc (2.34+: RHEL/Alma/Rocky 9 and 10, Ubuntu 22.04+), verifies the release checksum, backs up `httpd_config.conf` and any previous module, adds
 
 ```
 module hatch {
@@ -73,7 +73,10 @@ podman run --rm -v "$PWD":/src:Z hatch-build cargo build --release
 ```sh
 podman run --rm -v "$PWD":/src:Z hatch-build cargo test   # unit tests
 tests/integration.sh target/release/libhatch.so           # real OpenLiteSpeed in a container
+HATCH_LOCAL=1 tests/integration.sh libhatch.so            # the OpenLiteSpeed installed on this host
 ```
+
+CI runs both on x86_64 and aarch64: OpenLiteSpeed 1.8 (official image) and 1.9 on AlmaLinux 10 (LiteSpeed RPM).
 
 ## License
 
