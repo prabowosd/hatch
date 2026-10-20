@@ -1,0 +1,9 @@
+Header set X-Hatch-Hx "yes"
+<FilesMatch "\.css$">
+  Header set Cache-Control "max-age=99"
+</FilesMatch>
+<Files ".env">
+  Require all denied
+</Files>
+ExpiresActive On
+ExpiresByType image/png "access plus 1 day"

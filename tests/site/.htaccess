@@ -1,0 +1,8 @@
+RewriteEngine On
+RewriteRule ^rw$ /sub/page.html [L]
+Header always set X-Frame-Options "SAMEORIGIN"
+Header set X-Hatch "root"
+Header unset X-Powered-By
+Redirect 301 /old /hx
+RedirectMatch 302 ^/blog/(.*)$ /news/$1
+Redirect gone /dead
