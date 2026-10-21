@@ -76,7 +76,9 @@ check() {
 }
 headers() { curl -s -D - -o /dev/null "$B$1" | tr -d '\r' | tr 'A-Z' 'a-z'; }
 code() { curl -s -o /dev/null -w '%{http_code}' "$B$1"; }
+code_post() { curl -s -o /dev/null -w '%{http_code}' -X "$2" "$B$1"; }
 location() { curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "$B$1"; }
+charset_header() { headers "$1" | grep -i '^content-type:' | grep -qi 'charset=' && echo has-charset || echo no-charset; }
 
 echo "hatch integration ($LABEL)"
 check "Header set at the docroot"        'x-frame-options: sameorigin'      "$(headers /)"
@@ -103,6 +105,22 @@ check "ErrorDocument serves the custom page" 'custom not found'            "$(cu
 check "ErrorDocument keeps the 404 status" '404'                           "$(code /errdoc/missing)"
 check "ErrorDocument covers a denial"      'custom forbidden'              "$(curl -s "$B/errdoc403/secret.txt")"
 check "denial keeps the 403 status"        '403'                          "$(code /errdoc403/secret.txt)"
+
+# A stripped backslash turns ^\. into ^. and denies every file in the folder.
+check "FilesMatch ^\\. keeps a normal file" '200'                          "$(code /dotguard/)"
+check "FilesMatch ^\\. blocks a dotfile"   '403'                          "$(code /dotguard/.secret)"
+
+check "Limit allows GET"                   '200'                          "$(code /limit/)"
+check "Limit denies POST"                  '403'                          "$(code_post /limit/ POST)"
+check "Limit denies DELETE"                '403'                          "$(code_post /limit/ DELETE)"
+
+check "Satisfy Any allows a granted client" '200'                         "$(code /satisfy/)"
+check "Satisfy All denies when the host rule denies" '403'                "$(code /satisfy-all/)"
+
+check "AddDefaultCharset adds charset to html" 'charset=iso-8859-1'       "$(headers /charset/)"
+check "AddDefaultCharset leaves images alone" 'no-charset'                "$(charset_header /charset/i.png)"
+
+check "SSLRequireSSL denies plain HTTP"    '403'                          "$(code /sslrequire/)"
 
 # SetEnv reaches the backend, so PHP sees the same variables rewrite rules do.
 if [ "$(curl -s "$B/env/show.php")" = gold ]; then
