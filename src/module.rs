@@ -207,11 +207,12 @@ unsafe extern "C" fn on_uri_map(param: *mut lsi_param_t) -> c_int {
             }
             return LSI_RETCODE_LSI_ERROR as c_int;
         }
+        // A denied request goes to its ErrorDocument when one is configured, else the hook denies.
+        let errordoc = apply_errordocument(api, s, &d);
         if d.denied {
-            // A denied request goes to its ErrorDocument when one is configured, else the hook denies.
-            return if apply_errordocument(api, s, &d) { LSI_RETCODE_LSI_OK as c_int } else { LSI_RETCODE_LSI_DENY as c_int };
+            return if errordoc { LSI_RETCODE_LSI_OK as c_int } else { LSI_RETCODE_LSI_DENY as c_int };
         }
-        if apply_errordocument(api, s, &d) {
+        if errordoc {
             return LSI_RETCODE_LSI_OK as c_int;
         }
         if d.indexes == Some(false) {
