@@ -71,6 +71,29 @@ sudo bash install.sh --uninstall
 
 CyberPanel ships its own OpenLiteSpeed core. hatch recognises it by the `cyberpanel_lsi_api_abi_v1` symbol the core exports and reads the table with that layout. On a core with an unknown marker it logs one line and stays idle instead of guessing. The bundled `cyberpanel_ols` module needs a paid license and stays inert without one; hatch runs next to it.
 
+## Docker
+
+`install.sh` edits an OpenLiteSpeed installed on the host. For a container, mount the release `.so` and a config that enables it instead:
+
+```yaml
+services:
+  openlitespeed:
+    image: litespeedtech/openlitespeed:latest
+    volumes:
+      - ./hatch-x86_64-linux-gnu.so:/usr/local/lsws/modules/hatch.so:ro
+      - ./httpd_config.conf:/usr/local/lsws/conf/httpd_config.conf:ro
+```
+
+Add this block to `httpd_config.conf`, then restart the container:
+
+```
+module hatch {
+  ls_enabled 1
+}
+```
+
+Use the `x86_64` or `aarch64` asset that matches the container. The image must use glibc (the official OpenLiteSpeed images do); a musl/Alpine image cannot load the module.
+
 ## How it works
 
 - Hooks `URI_MAP` (redirects and access control) and `SEND_RESP_HEADER` (headers and expiry).
