@@ -95,8 +95,9 @@ fn doc_root(api: &Api, s: *const lsi_session_t) -> Option<PathBuf> {
 fn file_path(api: &Api, s: *const lsi_session_t, uri: &str) -> Option<PathBuf> {
     let mut buf = [0u8; BUF];
     let n = unsafe { (api.get_uri_file_path)(s, uri.as_ptr() as *const c_char, uri.len() as c_int, buf.as_mut_ptr() as *mut c_char, BUF as c_int) };
-    (n == 0).then(|| {
-        let end = buf.iter().position(|&b| b == 0).unwrap_or(BUF);
+    (n > 0).then(|| {
+        let end = (n as usize).min(BUF);
+        let end = buf[..end].iter().position(|&b| b == 0).unwrap_or(end);
         PathBuf::from(String::from_utf8_lossy(&buf[..end]).to_string())
     })
 }
@@ -136,8 +137,14 @@ fn evaluate(s: *const lsi_session_t) -> Option<Decision> {
     // get_uri_file_path returns nonzero when it cannot map the URI, so fall back to the docroot.
     let path = uri.as_deref().and_then(|u| file_path(api, s, u)).filter(|p| !p.as_os_str().is_empty())
         .or_else(|| Some(map_uri(root.as_deref()?, uri.as_deref()?)?));
+    // If the server's path is not inside the docroot, fall back to the docroot mapping.
+    let path = match (&root, &path, uri.as_deref()) {
+        (Some(r), Some(p), Some(u)) if p.strip_prefix(r).is_err() => map_uri(r, u)?,
+        (_, Some(p), _) => p.clone(),
+        _ => return None,
+    };
     trace(s, || format!("uri={uri:?} doc_root={root:?} file={path:?}"));
-    let (uri, root, path) = (uri?, root?, path?);
+    let (uri, root, path) = (uri?, root?, path);
     let rel = path.strip_prefix(&root).ok()?;
     let is_dir = uri.ends_with('/') || path.is_dir();
     let (folders, file_name) = if is_dir {
@@ -233,8 +240,8 @@ fn deny_directory_listing(api: &Api, s: *const lsi_session_t) -> Option<c_int> {
         return None;
     }
     let root = doc_root(api, s)?;
-    let dir = map_uri(&root, &uri)?;
-    // A folder holding any configured index file is served normally, not listed.
+    let dir = file_path(api, s, &uri).filter(|p| !p.as_os_str().is_empty())
+        .or_else(|| map_uri(&root, &uri))?;
     const INDEX_FILES: [&str; 3] = ["index.html", "index.php", "index.htm"];
     let has_index = INDEX_FILES.iter().any(|name| dir.join(name).is_file());
     (!has_index && dir.is_dir()).then_some(403)
@@ -337,7 +344,8 @@ fn apply_errordocument(api: &Api, s: *const lsi_session_t, d: &Decision) -> bool
     }
     let Some(uri) = read(api.get_req_uri, s) else { return false };
     let Some(root) = doc_root(api, s) else { return false };
-    let Some(path) = map_uri(&root, &uri) else { return false };
+    let path = file_path(api, s, &uri).filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| map_uri(&root, &uri).unwrap_or_else(|| root.clone()));
     let code = if d.denied {
         403
     } else if !path.exists() && !uri.ends_with('/') {
