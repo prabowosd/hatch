@@ -195,6 +195,11 @@ fn req_var(api: &Api, s: *const lsi_session_t, id: c_int) -> Option<String> {
     (n > 0).then(|| String::from_utf8_lossy(&buf[..n as usize]).into_owned())
 }
 
+/// Whether the request arrived over TLS, for `SSLRequireSSL`.
+fn is_https(api: &Api, s: *const lsi_session_t) -> bool {
+    req_var(api, s, LSI_REQ_VARIABLE_LSI_VAR_HTTPS as c_int).is_some_and(|v| v.eq_ignore_ascii_case("on"))
+}
+
 fn guard(f: impl FnOnce() -> c_int + std::panic::UnwindSafe) -> c_int {
     std::panic::catch_unwind(f).unwrap_or(LSI_RETCODE_LSI_OK as c_int)
 }
@@ -202,10 +207,14 @@ fn guard(f: impl FnOnce() -> c_int + std::panic::UnwindSafe) -> c_int {
 unsafe extern "C" fn on_uri_map(param: *mut lsi_param_t) -> c_int {
     guard(|| {
         let s = unsafe { (*param).session };
-        let (Some(api), Some(d)) = (api(), evaluate(s)) else { return LSI_RETCODE_LSI_OK as c_int };
+        let (Some(api), Some(mut d)) = (api(), evaluate(s)) else { return LSI_RETCODE_LSI_OK as c_int };
         // Env and php config belong to the request, so they are set before anything else uses them.
         apply_env(api, s, &d);
         apply_php(api, s, &d);
+        // SSLRequireSSL denies a request that did not arrive over TLS.
+        if d.ssl_require && !is_https(api, s) {
+            d.denied = true;
+        }
         if let Some((status, target)) = d.redirect {
             // Status, Location and an early end: the same path 410 takes, and it covers 308 too.
             unsafe { (api.set_status_code)(s, status as c_int) };
@@ -375,6 +384,13 @@ unsafe extern "C" fn on_send_resp_header(param: *mut lsi_param_t) -> c_int {
             remove_header(api, s, "Expires");
             set_header(api, s, "Cache-Control", &format!("max-age={secs}"), LSI_HEADER_OP_LSI_HEADEROP_SET);
             set_header(api, s, "Expires", &http_date(SystemTime::now() + Duration::from_secs(secs)), LSI_HEADER_OP_LSI_HEADEROP_SET);
+        }
+        // AddDefaultCharset only fills in a missing charset; an explicit one wins.
+        if let Some(charset) = d.default_charset.as_deref().filter(|c| !c.is_empty()) {
+            let ct = content_type(api, s);
+            if !ct.is_empty() && !ct.to_ascii_lowercase().contains("charset=") {
+                set_header(api, s, "Content-Type", &format!("{ct}; charset={charset}"), LSI_HEADER_OP_LSI_HEADEROP_SET);
+            }
         }
         for h in &d.headers {
             match h.action {

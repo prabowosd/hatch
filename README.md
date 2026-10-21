@@ -26,7 +26,11 @@ OpenLiteSpeed reads `RewriteRule` from `.htaccess` on its own, but ignores every
 | `SetEnvIf`, `SetEnvIfNoCase`, `BrowserMatch` | Matches a request header, `Request_URI`, `Request_Method`, `Remote_Addr`, `Remote_Host` or `Host`. `!var` and `var=value` are accepted. |
 | `php_value`, `php_admin_value`, `php_flag`, `php_admin_flag` | Needs CyberPanel's OpenLiteSpeed core, whose API carries the php config calls. On other cores the line is logged once and skipped. |
 | `ErrorDocument` | A path target, for 404 and for a denied request. The page is served through an internal redirect and keeps the original status. URL and text targets need a body hatch cannot write, so they are logged and skipped. |
-| `Options -Indexes` | A directory with no index file answers 403 instead of listing its contents. `+Indexes` restores the server default. |
+| `Options -Indexes` | A directory with no index file answers 403 instead of listing its contents. `+Indexes` restores the server default. Symlink and content-negotiation options (`FollowSymLinks`, `SymLinksIfOwnerMatch`, `MultiViews`) are accepted and left to the server. |
+| `<Limit>`, `<LimitExcept>` | Access rules apply only to the listed HTTP methods (or to every method except them). |
+| `Satisfy Any\|All` | Combines host rules (`Order`/`Allow`/`Deny`) with `Require` rules using OR (`Any`) or AND (`All`). |
+| `AddDefaultCharset` | Adds a charset to the response `Content-Type` when the response has none; `Off` disables it. |
+| `SSLRequireSSL` | Answers 403 when the request did not arrive over TLS. |
 | `Redirect`, `RedirectPermanent`, `RedirectTemp` | Prefix match that keeps the rest of the path, like mod_alias. Status words `permanent`, `temp`, `seeother`, `gone`. |
 | `RedirectMatch` | Regex with `$1`..`$9`. Targets must be a path or an `http(s)` URL. |
 | `Order`, `Allow from`, `Deny from` | Apache 2.2 semantics, IPv4, IPv6, CIDR and partial addresses (`10.1`). |
