@@ -1,0 +1,4 @@
+ErrorDocument 403 /errdoc403/403.html
+<Files "secret.txt">
+Require all denied
+</Files>

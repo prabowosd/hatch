@@ -6,7 +6,7 @@
 use crate::api::{self, Api};
 use crate::ffi::*;
 use crate::parse::parse;
-use crate::rules::{decide, Decision, HeaderAction, Rules};
+use crate::rules::{decide, Decision, HeaderAction, Request, Rules};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int};
@@ -162,8 +162,30 @@ fn evaluate(s: *const lsi_session_t) -> Option<Decision> {
         return None;
     }
     let client = read(api.get_client_ip, s).and_then(|ip| ip.parse::<IpAddr>().ok());
+    let method = req_var(api, s, LSI_REQ_VARIABLE_LSI_VAR_REQ_METHOD as c_int);
+    let header = |name: &str| req_header(api, s, name);
+    let req = Request { uri: &uri, file_name: &file_name, method: method.as_deref().unwrap_or("GET"), client, header: &header };
     let refs: Vec<&Rules> = chain.iter().map(Rc::as_ref).collect();
-    Some(decide(&refs, &uri, &file_name, client))
+    Some(decide(&refs, &req))
+}
+
+/// One request header by name, as SetEnvIf and Header env= need it.
+fn req_header(api: &Api, s: *const lsi_session_t, name: &str) -> Option<String> {
+    let name = std::ffi::CString::new(name).ok()?;
+    let mut len: c_int = 0;
+    let ptr = unsafe { (api.get_req_header)(s, name.as_ptr(), name.as_bytes().len() as c_int, &mut len) };
+    if ptr.is_null() || len <= 0 {
+        return None;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, len as usize) };
+    std::str::from_utf8(bytes).ok().map(str::to_owned)
+}
+
+/// A server variable that is always a short string, like the request method.
+fn req_var(api: &Api, s: *const lsi_session_t, id: c_int) -> Option<String> {
+    let mut buf = [0u8; 64];
+    let n = unsafe { (api.get_req_var_by_id)(s, id, buf.as_mut_ptr() as *mut c_char, buf.len() as c_int) };
+    (n > 0).then(|| String::from_utf8_lossy(&buf[..n as usize]).into_owned())
 }
 
 fn guard(f: impl FnOnce() -> c_int + std::panic::UnwindSafe) -> c_int {
@@ -174,6 +196,9 @@ unsafe extern "C" fn on_uri_map(param: *mut lsi_param_t) -> c_int {
     guard(|| {
         let s = unsafe { (*param).session };
         let (Some(api), Some(d)) = (api(), evaluate(s)) else { return LSI_RETCODE_LSI_OK as c_int };
+        // Env and php config belong to the request, so they are set before anything else uses them.
+        apply_env(api, s, &d);
+        apply_php(api, s, &d);
         if let Some((status, target)) = d.redirect {
             // Status, Location and an early end: the same path 410 takes, and it covers 308 too.
             unsafe { (api.set_status_code)(s, status as c_int) };
@@ -182,11 +207,37 @@ unsafe extern "C" fn on_uri_map(param: *mut lsi_param_t) -> c_int {
             }
             return LSI_RETCODE_LSI_ERROR as c_int;
         }
+        // A denied request goes to its ErrorDocument when one is configured, else the hook denies.
+        let errordoc = apply_errordocument(api, s, &d);
         if d.denied {
-            return LSI_RETCODE_LSI_DENY as c_int;
+            return if errordoc { LSI_RETCODE_LSI_OK as c_int } else { LSI_RETCODE_LSI_DENY as c_int };
+        }
+        if errordoc {
+            return LSI_RETCODE_LSI_OK as c_int;
+        }
+        if d.indexes == Some(false) {
+            // A directory with no index file would get a listing; Apache answers 403 instead.
+            if let Some(code) = deny_directory_listing(api, s) {
+                unsafe { (api.set_status_code)(s, code) };
+                return LSI_RETCODE_LSI_ERROR as c_int;
+            }
         }
         LSI_RETCODE_LSI_OK as c_int
     })
+}
+
+/// 403 when this request would produce a directory listing, otherwise None.
+fn deny_directory_listing(api: &Api, s: *const lsi_session_t) -> Option<c_int> {
+    let uri = read(api.get_req_uri, s)?;
+    if !uri.ends_with('/') {
+        return None;
+    }
+    let root = doc_root(api, s)?;
+    let dir = map_uri(&root, &uri)?;
+    // A folder holding any configured index file is served normally, not listed.
+    const INDEX_FILES: [&str; 3] = ["index.html", "index.php", "index.htm"];
+    let has_index = INDEX_FILES.iter().any(|name| dir.join(name).is_file());
+    (!has_index && dir.is_dir()).then_some(403)
 }
 
 fn http_date(at: SystemTime) -> String {
@@ -240,6 +291,70 @@ fn set_header(api: &Api, s: *const lsi_session_t, name: &str, value: &str, op: u
     unsafe {
         (api.set_resp_header)(s, LSI_RESP_HEADER_ID_LSI_RSPHDR_UNKNOWN, name.as_ptr() as *const c_char, name.len() as c_int, value.as_ptr() as *const c_char, value.len() as c_int, op as c_int);
     }
+}
+
+/// SetEnv, SetEnvIf and UnsetEnv, so the backend and rewrite rules see the same environment.
+fn apply_env(api: &Api, s: *const lsi_session_t, d: &Decision) {
+    for (name, value) in &d.env {
+        unsafe { (api.set_req_env)(s, name.as_ptr() as *const c_char, name.len() as u32, value.as_ptr() as *const c_char, value.len() as c_int) };
+    }
+    for name in &d.env_unset {
+        // An empty value is how the server clears a request environment variable.
+        unsafe { (api.set_req_env)(s, name.as_ptr() as *const c_char, name.len() as u32, std::ptr::null(), 0) };
+    }
+}
+
+/// php_value and php_flag, through the members only CyberPanel's core carries.
+fn apply_php(api: &Api, s: *const lsi_session_t, d: &Decision) {
+    if d.php.values.is_empty() && d.php.flags.is_empty() {
+        return;
+    }
+    if api.set_php_config_value.is_none() || api.set_php_config_flag.is_none() {
+        log(s, LSI_LOG_LEVEL_LSI_LOG_WARN, "php_value and php_flag need CyberPanel's OpenLiteSpeed core; ignored");
+        return;
+    }
+    for (name, value) in &d.php.values {
+        let (Ok(name), Ok(value)) = (std::ffi::CString::new(name.as_str()), std::ffi::CString::new(value.as_str())) else { continue };
+        // The core formats "name value" itself; the last argument selects the PHP config type.
+        unsafe { (api.set_php_config_value.unwrap())(s, name.as_ptr(), value.as_ptr(), PHP_CONFIG_TYPE) };
+    }
+    for (name, on) in &d.php.flags {
+        let Ok(name) = std::ffi::CString::new(name.as_str()) else { continue };
+        unsafe { (api.set_php_config_flag.unwrap())(s, name.as_ptr(), *on as c_int, PHP_CONFIG_TYPE) };
+    }
+}
+
+/// `parsePHPConfig` reads 2 as the per-request PHP config type.
+const PHP_CONFIG_TYPE: c_int = 2;
+
+/// ErrorDocument: send a denied or missing page to the configured one and keep its status.
+///
+/// LSIAPI only lets a handler write a body, so a filter cannot replace the error page. An
+/// internal redirect serves the configured file; the status is set before it starts.
+fn apply_errordocument(api: &Api, s: *const lsi_session_t, d: &Decision) -> bool {
+    if d.errordocs.is_empty() {
+        return false;
+    }
+    let Some(uri) = read(api.get_req_uri, s) else { return false };
+    let Some(root) = doc_root(api, s) else { return false };
+    let Some(path) = map_uri(&root, &uri) else { return false };
+    let code = if d.denied {
+        403
+    } else if !path.exists() && !uri.ends_with('/') {
+        404
+    } else {
+        return false;
+    };
+    let Some(doc) = d.errordocs.iter().find(|doc| doc.code == code) else { return false };
+    // The target runs through this hook again; redirecting it to itself would loop.
+    if doc.target == uri {
+        return false;
+    }
+    unsafe {
+        (api.set_status_code)(s, code as c_int);
+        (api.set_uri_qs)(s, LSI_URL_OP_LSI_URL_REDIRECT_INTERNAL as c_int, doc.target.as_ptr() as *const c_char, doc.target.len() as c_int, std::ptr::null(), 0);
+    }
+    true
 }
 
 unsafe extern "C" fn on_send_resp_header(param: *mut lsi_param_t) -> c_int {

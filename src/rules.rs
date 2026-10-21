@@ -22,6 +22,42 @@ pub struct HeaderOp {
     pub action: HeaderAction,
     pub name: String,
     pub value: String,
+    /// `env=name` or `env=!name`; the header applies only when the variable matches.
+    pub env: Option<(String, bool)>,
+}
+
+/// One `SetEnvIf`-style test. Any test matching sets `set` in the request environment.
+#[derive(Debug, Clone)]
+pub struct EnvTest {
+    /// Header name for `SetEnvIf`, or `None` for `SetEnvIf Request_URI`/`Remote_Host` variables.
+    attribute: String,
+    pattern: Regex,
+    /// `env=!name` style negation: set the variable only when the pattern does not match.
+    negate: bool,
+    pub set: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Env {
+    pub plain: Vec<(String, String)>,
+    pub tests: Vec<EnvTest>,
+    /// `UnsetEnv name`
+    pub unset: Vec<String>,
+}
+
+/// php_value and php_flag, only settable on a core whose table carries the php members.
+#[derive(Debug, Clone, Default)]
+pub struct Php {
+    pub values: Vec<(String, String)>,
+    pub flags: Vec<(String, bool)>,
+}
+
+/// Apache `ErrorDocument <code> <target>`, where the target is a path, a URL, or quoted text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ErrorDocument {
+    pub code: u16,
+    pub target: String,
 }
 
 #[derive(Debug, Clone)]
@@ -74,6 +110,10 @@ pub struct Section {
     pub headers: Vec<HeaderOp>,
     access: Access,
     pub expires: Expires,
+    pub env: Env,
+    pub php: Php,
+    pub errordocs: Vec<ErrorDocument>,
+    pub options_indexes: Option<bool>,
 }
 
 /// The compiled form of one .htaccess file.
@@ -91,6 +131,12 @@ pub struct Decision {
     pub denied: bool,
     pub headers: Vec<HeaderOp>,
     pub expires: Expires,
+    pub env: Vec<(String, String)>,
+    pub env_unset: Vec<String>,
+    pub php: Php,
+    pub errordocs: Vec<ErrorDocument>,
+    /// `None` leaves the server's own directory listing setting alone.
+    pub indexes: Option<bool>,
 }
 
 const MAX_REGEX: usize = 1 << 20;
@@ -111,6 +157,17 @@ fn target_ok(target: &str) -> bool {
     value_ok(target)
         && !target.contains(char::is_whitespace)
         && (target.starts_with('/') || target.starts_with("http://") || target.starts_with("https://"))
+}
+
+/// Environment variable names reach the server, so keep them to a plain identifier.
+fn env_name_ok(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.')
+}
+
+fn php_name_ok(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 128 && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.')
 }
 
 fn parse_net(value: &str) -> Option<Net> {
@@ -248,6 +305,10 @@ impl Compiler {
                     headers: Vec::new(),
                     access: Access::default(),
                     expires: Expires::default(),
+                    env: Env::default(),
+                    php: Php::default(),
+                    errordocs: Vec::new(),
+                    options_indexes: None,
                 });
                 let index = self.rules.sections.len() - 1;
                 self.walk(children, index);
@@ -296,6 +357,50 @@ impl Compiler {
                 _ => self.note(line, "ExpiresByType needs a MIME type and an expiry"),
             },
             "rewriteengine" | "rewriterule" | "rewritecond" | "rewritebase" | "rewriteoptions" => {}
+            "setenv" => {
+                let Some(name) = args.first().filter(|n| env_name_ok(n)) else {
+                    return self.note(line, "SetEnv needs a variable name");
+                };
+                let value = args.get(1).cloned().unwrap_or_default();
+                if !value_ok(&value) {
+                    return self.note(line, "SetEnv value is not usable");
+                }
+                self.rules.sections[s].env.plain.push((name.clone(), value));
+            }
+            "unsetenv" => {
+                let Some(name) = args.first().filter(|n| env_name_ok(n)) else {
+                    return self.note(line, "UnsetEnv needs a variable name");
+                };
+                self.rules.sections[s].env.unset.push(name.clone());
+            }
+            "setenvif" | "setenvifnocase" | "browsermatch" => self.env_test(name, args, line, s),
+            // The LSIAPI table can read a request header but has no call to change one.
+            "requestheader" => self.note(line, "RequestHeader is not available in LSIAPI, ignored"),
+            "php_value" | "php_admin_value" => {
+                let Some((name, _)) = args.split_first() else {
+                    return self.note(line, format!("{name} needs a name and a value"));
+                };
+                if !php_name_ok(name) || !value_ok(&args[1..].join(" ")) {
+                    return self.note(line, format!("{name} has an unusable name or value"));
+                }
+                self.rules.sections[s].php.values.push((name.clone(), args[1..].join(" ")));
+            }
+            "php_flag" | "php_admin_flag" => {
+                let (Some(name), Some(value)) = (args.first(), args.get(1)) else {
+                    return self.note(line, format!("{name} needs a name and On or Off"));
+                };
+                let flag = match value.to_ascii_lowercase().as_str() {
+                    "on" | "1" => true,
+                    "off" | "0" => false,
+                    _ => return self.note(line, format!("{name} value must be On or Off")),
+                };
+                if !php_name_ok(name) {
+                    return self.note(line, format!("{name} has an unusable name"));
+                }
+                self.rules.sections[s].php.flags.push((name.clone(), flag));
+            }
+            "errordocument" => self.error_document(args, line, s),
+            "options" => self.options(args, line, s),
             other => self.note(line, format!("{other} is not supported yet, ignored")),
         }
     }
@@ -318,13 +423,114 @@ impl Compiler {
         };
         let value = args.get(2).cloned().unwrap_or_default();
         let extra = if action == HeaderAction::Unset { 2 } else { 3 };
-        if args.len() > extra {
-            return self.note(line, "Header conditions (env=, expr=) are not supported yet, ignored");
+        let mut env = None;
+        for condition in args.iter().skip(extra) {
+            // Only the keyword is case-insensitive; the variable name is matched as written.
+            if condition.len() >= 4 && condition[..4].eq_ignore_ascii_case("env=") {
+                let name = &condition[4..];
+                let (name, negated) = match name.strip_prefix('!') {
+                    Some(rest) => (rest, true),
+                    None => (name, false),
+                };
+                if !env_name_ok(name) {
+                    return self.note(line, format!("Header env {name:?} is not a usable name"));
+                }
+                env = Some((name.to_string(), negated));
+            } else if condition.len() >= 5 && condition[..5].eq_ignore_ascii_case("expr=") {
+                return self.note(line, "Header expr= is not supported yet, ignored");
+            } else {
+                return self.note(line, format!("Header condition {condition:?} is not supported"));
+            }
         }
         if !header_name_ok(name) || !value_ok(&value) || (action != HeaderAction::Unset && value.is_empty()) {
             return self.note(line, "Header has an invalid name or value, ignored");
         }
-        self.rules.sections[s].headers.push(HeaderOp { action, name: name.clone(), value });
+        self.rules.sections[s].headers.push(HeaderOp { action, name: name.clone(), value, env });
+    }
+
+    /// `SetEnvIf attribute pattern [env[=value]]`, `BrowserMatch pattern env`.
+    fn env_test(&mut self, name: &str, args: &[String], line: usize, s: usize) {
+        let (attribute, pattern, rest) = match name {
+            "browsermatch" => ("User-Agent", args.first(), args.get(1..).unwrap_or_default()),
+            _ => (args.first().map(String::as_str).unwrap_or(""), args.get(1), args.get(2..).unwrap_or_default()),
+        };
+        let Some(pattern) = pattern.filter(|p| !p.is_empty()) else {
+            return self.note(line, format!("{name} needs an attribute and a pattern"));
+        };
+        let Some(compiled) = regex(pattern, name == "setenvifnocase") else {
+            return self.note(line, format!("{name} pattern {pattern:?} is not supported"));
+        };
+        let attribute = attribute.to_ascii_lowercase();
+        if !matches!(attribute.as_str(), "request_uri" | "request_method" | "remote_host" | "remote_addr" | "user-agent" | "referer" | "host") {
+            // Any other name is a request header, checked the same way Header checks names.
+            let bare = attribute.strip_prefix("http_").unwrap_or(&attribute);
+            if !header_name_ok(bare) {
+                return self.note(line, format!("{name} attribute {attribute:?} is not supported"));
+            }
+        }
+        let mut added = false;
+        for spec in rest {
+            let (set, value, negate) = match spec.split_once('=') {
+                Some((k, v)) => (k.to_string(), v.to_string(), false),
+                None => (spec.trim_start_matches('!').to_string(), "1".to_string(), spec.starts_with('!')),
+            };
+            if !env_name_ok(&set) || !value_ok(&value) {
+                self.note(line, format!("{name} variable {spec:?} is not usable"));
+                continue;
+            }
+            self.rules.sections[s].env.tests.push(EnvTest {
+                attribute: attribute.clone(),
+                pattern: compiled.clone(),
+                negate,
+                set,
+                value,
+            });
+            added = true;
+        }
+        if !added && rest.is_empty() {
+            self.note(line, format!("{name} needs a variable to set"));
+        }
+    }
+
+    /// `Options -Indexes` and `Options +Indexes`; other options are reported and ignored.
+    fn options(&mut self, args: &[String], line: usize, s: usize) {
+        let mut touched = false;
+        for option in args {
+            let (on, name) = match option.as_bytes().first() {
+                Some(b'-') => (false, &option[1..]),
+                Some(b'+') => (true, &option[1..]),
+                _ => (true, option.as_str()),
+            };
+            if name.eq_ignore_ascii_case("indexes") {
+                self.rules.sections[s].options_indexes = Some(on);
+                touched = true;
+            } else {
+                self.note(line, format!("Options {name} is not supported yet, ignored"));
+            }
+        }
+        if !touched && args.is_empty() {
+            self.note(line, "Options needs at least one option");
+        }
+    }
+
+    /// `ErrorDocument <code> <path>`; URL and text targets need a body hatch cannot write.
+    fn error_document(&mut self, args: &[String], line: usize, s: usize) {
+        let (Some(code), Some(target)) = (args.first(), args.get(1)) else {
+            return self.note(line, "ErrorDocument needs a status code and a target");
+        };
+        let Ok(code) = code.parse::<u16>() else {
+            return self.note(line, "ErrorDocument needs a numeric status code");
+        };
+        if !(400..600).contains(&code) {
+            return self.note(line, format!("ErrorDocument status {code} is not an error"));
+        }
+        if !target.starts_with('/') {
+            return self.note(line, "ErrorDocument with a URL or text target is not supported");
+        }
+        if !target_ok(target) {
+            return self.note(line, "ErrorDocument target is not a usable path");
+        }
+        self.rules.sections[s].errordocs.push(ErrorDocument { code, target: target.clone() });
     }
 
     fn require(&mut self, args: &[String], line: usize, s: usize) {
@@ -399,7 +605,16 @@ impl Compiler {
 
 impl Rules {
     pub fn compile(nodes: &[Node]) -> Rules {
-        let root = Section { files: FileMatch::Any, headers: Vec::new(), access: Access::default(), expires: Expires::default() };
+        let root = Section {
+            files: FileMatch::Any,
+            headers: Vec::new(),
+            access: Access::default(),
+            expires: Expires::default(),
+            env: Env::default(),
+            php: Php::default(),
+            errordocs: Vec::new(),
+            options_indexes: None,
+        };
         let mut compiler = Compiler { rules: Rules { sections: vec![root], ..Default::default() } };
         compiler.walk(nodes, 0);
         compiler.rules
@@ -446,14 +661,36 @@ fn substitute(target: &str, caps: &regex::Captures) -> String {
     out
 }
 
+/// What the request exposes to `SetEnvIf` and `Header env=`.
+pub struct Request<'a> {
+    pub uri: &'a str,
+    pub file_name: &'a str,
+    pub method: &'a str,
+    pub client: Option<IpAddr>,
+    /// Request headers, by name, for `SetEnvIf X-Forwarded-For ...`.
+    pub header: &'a dyn Fn(&str) -> Option<String>,
+}
+
+impl<'a> Request<'a> {
+    /// The attribute a `SetEnvIf` test reads: a request header, or one of the Apache variables.
+    fn attribute(&self, name: &str) -> Option<String> {
+        match name {
+            "request_uri" => Some(self.uri.to_string()),
+            "request_method" => Some(self.method.to_string()),
+            "remote_addr" | "remote_host" => self.client.map(|ip| ip.to_string()),
+            _ => (self.header)(name),
+        }
+    }
+}
+
 /// Evaluate the .htaccess chain for a request. `chain` runs from the docroot down to the file's folder.
-pub fn decide(chain: &[&Rules], uri: &str, file_name: &str, client: Option<IpAddr>) -> Decision {
+pub fn decide(chain: &[&Rules], req: &Request) -> Decision {
     let mut decision = Decision::default();
 
     // The deepest folder's redirects win, as with mod_alias in per-directory context.
     'redirects: for rules in chain.iter().rev() {
         for r in &rules.redirects {
-            if let Some(caps) = r.pattern.captures(uri) {
+            if let Some(caps) = r.pattern.captures(req.uri) {
                 let target = r.target.as_ref().map(|t| {
                     if r.keeps_tail { format!("{t}{}", caps.get(1).map_or("", |m| m.as_str())) } else { substitute(t, &caps) }
                 });
@@ -464,19 +701,43 @@ pub fn decide(chain: &[&Rules], uri: &str, file_name: &str, client: Option<IpAdd
     }
 
     let mut access: Option<&Access> = None;
+    let mut env: Vec<(String, String)> = Vec::new();
     for rules in chain {
         for section in &rules.sections {
             let applies = match &section.files {
                 FileMatch::Any => true,
-                FileMatch::Name(re) => re.is_match(file_name),
+                FileMatch::Name(re) => re.is_match(req.file_name),
             };
             if !applies {
                 continue;
             }
+            // SetEnv and SetEnvIf run before Header, so a later file sees what an earlier one set.
+            for (name, value) in &section.env.plain {
+                set_env(&mut env, name, value);
+            }
+            for test in &section.env.tests {
+                let matched = req.attribute(&test.attribute).is_some_and(|value| test.pattern.is_match(&value));
+                if matched != test.negate {
+                    set_env(&mut env, &test.set, &test.value);
+                }
+            }
+            for name in &section.env.unset {
+                env.retain(|(n, _)| n != name);
+            }
+
             decision.headers.extend(section.headers.iter().cloned());
             if section.access.is_set() {
                 access = Some(&section.access);
             }
+            if let Some(indexes) = section.options_indexes {
+                decision.indexes = Some(indexes);
+            }
+            for doc in &section.errordocs {
+                decision.errordocs.retain(|d| d.code != doc.code);
+                decision.errordocs.push(doc.clone());
+            }
+            decision.php.values.extend(section.php.values.iter().cloned());
+            decision.php.flags.extend(section.php.flags.iter().cloned());
             let e = &section.expires;
             if e.active.is_some() {
                 decision.expires.active = e.active;
@@ -490,8 +751,24 @@ pub fn decide(chain: &[&Rules], uri: &str, file_name: &str, client: Option<IpAdd
             }
         }
     }
-    decision.denied = access.is_some_and(|a| a.denies(client.as_ref()));
+    // A Header env= condition is checked against the environment the same request built.
+    let applies = |env: &Option<(String, bool)>, built: &[(String, String)]| match env {
+        None => true,
+        Some((name, negated)) => built.iter().any(|(n, _)| n == name) != *negated,
+    };
+    let built = std::mem::take(&mut env);
+    let headers = std::mem::take(&mut decision.headers);
+    decision.headers = headers.into_iter().filter(|h| applies(&h.env, &built)).collect();
+    decision.env = built;
+    decision.denied = access.is_some_and(|a| a.denies(req.client.as_ref()));
     decision
+}
+
+fn set_env(env: &mut Vec<(String, String)>, name: &str, value: &str) {
+    match env.iter_mut().find(|(n, _)| n == name) {
+        Some(slot) => slot.1 = value.to_string(),
+        None => env.push((name.to_string(), value.to_string())),
+    }
 }
 
 impl Expires {
@@ -522,105 +799,215 @@ mod tests {
         Some(s.parse().unwrap())
     }
 
+    /// A request with no headers, for tests that only care about paths and rules.
+    fn plain<'a>(uri: &'a str, file_name: &'a str, client: Option<IpAddr>) -> Request<'a> {
+        Request { uri, file_name, method: "GET", client, header: &|_| None }
+    }
+
+    /// A request carrying one request header, for SetEnvIf tests.
+    fn with_header<'a>(uri: &'a str, client: Option<IpAddr>, header: &'a dyn Fn(&str) -> Option<String>) -> Request<'a> {
+        Request { uri, file_name: "", method: "GET", client, header }
+    }
+
+    /// The header closure `with_header` takes, kept alive by the caller.
+    fn one_header<'a>(name: &'a str, value: &'a str) -> impl Fn(&str) -> Option<String> + 'a {
+        move |wanted: &str| wanted.eq_ignore_ascii_case(name).then(|| value.to_string())
+    }
+
     #[test]
     fn headers_accumulate_from_parent_to_child_and_files_blocks_filter() {
         let parent = rules("Header always set X-Frame-Options \"SAMEORIGIN\"\nHeader unset X-Powered-By\n");
         let child = rules("<FilesMatch \"\\.css$\">\nHeader set Cache-Control \"max-age=60\"\n</FilesMatch>\n");
-        let css = decide(&[&parent, &child], "/a/b.css", "b.css", None);
+        let css = decide(&[&parent, &child], &plain("/a/b.css", "b.css", None));
         let names: Vec<_> = css.headers.iter().map(|h| (h.action, h.name.as_str())).collect();
         assert_eq!(names, [(HeaderAction::Set, "X-Frame-Options"), (HeaderAction::Unset, "X-Powered-By"), (HeaderAction::Set, "Cache-Control")]);
-        assert_eq!(decide(&[&parent, &child], "/a/b.js", "b.js", None).headers.len(), 2);
+        assert_eq!(decide(&[&parent, &child], &plain("/a/b.js", "b.js", None)).headers.len(), 2);
     }
 
     #[test]
     fn unsafe_headers_and_conditions_are_skipped() {
-        let r = rules("Header set Bad\\ Name x\nHeader set X-A \"v\" env=foo\nHeader edit X-B a b\nHeader set X-Ok \"1\"\n");
-        let d = decide(&[&r], "/", "", None);
+        let r = rules("Header set Bad\\ Name x\nHeader edit X-B a b\nHeader set X-Ok \"1\"\n");
+        let d = decide(&[&r], &plain("/", "", None));
         assert_eq!(d.headers.len(), 1);
-        assert_eq!(r.notes.len(), 3);
+        assert_eq!(r.notes.len(), 2);
     }
 
     #[test]
     fn negated_ifmodule_is_the_fallback_and_is_skipped() {
         let r = rules("<IfModule !mod_headers.c>\nHeader set X-Skip 1\n</IfModule>\n<IfModule mod_headers.c>\nHeader set X-Use 1\n</IfModule>\n");
-        let d = decide(&[&r], "/", "", None);
+        let d = decide(&[&r], &plain("/", "", None));
         assert_eq!(d.headers.iter().map(|h| h.name.as_str()).collect::<Vec<_>>(), ["X-Use"]);
     }
 
     #[test]
     fn redirect_keeps_the_tail_and_redirectmatch_substitutes() {
         let r = rules("Redirect 301 /old /new\nRedirectMatch ^/blog/(.*)$ /news/$1\nRedirect gone /dead\n");
-        assert_eq!(decide(&[&r], "/old/x/y", "", None).redirect, Some((301, Some("/new/x/y".into()))));
-        assert_eq!(decide(&[&r], "/old", "", None).redirect, Some((301, Some("/new".into()))));
-        assert_eq!(decide(&[&r], "/older", "", None).redirect, None);
-        assert_eq!(decide(&[&r], "/blog/2026/post", "", None).redirect, Some((302, Some("/news/2026/post".into()))));
-        assert_eq!(decide(&[&r], "/dead", "", None).redirect, Some((410, None)));
+        assert_eq!(decide(&[&r], &plain("/old/x/y", "", None)).redirect, Some((301, Some("/new/x/y".into()))));
+        assert_eq!(decide(&[&r], &plain("/old", "", None)).redirect, Some((301, Some("/new".into()))));
+        assert_eq!(decide(&[&r], &plain("/older", "", None)).redirect, None);
+        assert_eq!(decide(&[&r], &plain("/blog/2026/post", "", None)).redirect, Some((302, Some("/news/2026/post".into()))));
+        assert_eq!(decide(&[&r], &plain("/dead", "", None)).redirect, Some((410, None)));
     }
 
     #[test]
     fn redirect_targets_must_be_paths_or_http_urls() {
         let r = rules("Redirect /a javascript:alert(1)\nRedirect /b ftp://x\nRedirect /c https://example.com/c\n");
-        assert_eq!(decide(&[&r], "/a", "", None).redirect, None);
-        assert_eq!(decide(&[&r], "/b", "", None).redirect, None);
-        assert!(decide(&[&r], "/c", "", None).redirect.is_some());
+        assert_eq!(decide(&[&r], &plain("/a", "", None)).redirect, None);
+        assert_eq!(decide(&[&r], &plain("/b", "", None)).redirect, None);
+        assert!(decide(&[&r], &plain("/c", "", None)).redirect.is_some());
     }
 
     #[test]
     fn apache22_order_allow_deny() {
         let only_office = rules("Order Deny,Allow\nDeny from all\nAllow from 10.1.2.0/24 192.168\n");
-        assert!(!decide(&[&only_office], "/", "", ip("10.1.2.9")).denied);
-        assert!(!decide(&[&only_office], "/", "", ip("192.168.5.5")).denied);
-        assert!(decide(&[&only_office], "/", "", ip("8.8.8.8")).denied);
+        assert!(!decide(&[&only_office], &plain("/", "", ip("10.1.2.9"))).denied);
+        assert!(!decide(&[&only_office], &plain("/", "", ip("192.168.5.5"))).denied);
+        assert!(decide(&[&only_office], &plain("/", "", ip("8.8.8.8"))).denied);
         let block_one = rules("Order Allow,Deny\nAllow from all\nDeny from 1.2.3.4\n");
-        assert!(decide(&[&block_one], "/", "", ip("1.2.3.4")).denied);
-        assert!(!decide(&[&block_one], "/", "", ip("1.2.3.5")).denied);
+        assert!(decide(&[&block_one], &plain("/", "", ip("1.2.3.4"))).denied);
+        assert!(!decide(&[&block_one], &plain("/", "", ip("1.2.3.5"))).denied);
     }
 
     #[test]
     fn apache24_require_and_files_deny() {
         let r = rules("<Files \".env\">\nRequire all denied\n</Files>\n<FilesMatch \"\\.(bak|sql)$\">\nRequire ip 10.0.0.0/8\n</FilesMatch>\n");
-        assert!(decide(&[&r], "/.env", ".env", ip("10.0.0.1")).denied);
-        assert!(!decide(&[&r], "/index.php", "index.php", ip("1.1.1.1")).denied);
-        assert!(decide(&[&r], "/db.sql", "db.sql", ip("1.1.1.1")).denied);
-        assert!(!decide(&[&r], "/db.sql", "db.sql", ip("10.9.9.9")).denied);
+        assert!(decide(&[&r], &plain("/.env", ".env", ip("10.0.0.1"))).denied);
+        assert!(!decide(&[&r], &plain("/index.php", "index.php", ip("1.1.1.1"))).denied);
+        assert!(decide(&[&r], &plain("/db.sql", "db.sql", ip("1.1.1.1"))).denied);
+        assert!(!decide(&[&r], &plain("/db.sql", "db.sql", ip("10.9.9.9"))).denied);
         let not = rules("Require not ip 5.5.5.5\n");
-        assert!(decide(&[&not], "/", "", ip("5.5.5.5")).denied);
-        assert!(!decide(&[&not], "/", "", ip("5.5.5.6")).denied);
+        assert!(decide(&[&not], &plain("/", "", ip("5.5.5.5"))).denied);
+        assert!(!decide(&[&not], &plain("/", "", ip("5.5.5.6"))).denied);
     }
 
     #[test]
     fn child_access_replaces_parent_access() {
         let parent = rules("Require all denied\n");
         let child = rules("Require all granted\n");
-        assert!(decide(&[&parent], "/x", "", ip("1.1.1.1")).denied);
-        assert!(!decide(&[&parent, &child], "/x/y", "", ip("1.1.1.1")).denied);
+        assert!(decide(&[&parent], &plain("/x", "", ip("1.1.1.1"))).denied);
+        assert!(!decide(&[&parent, &child], &plain("/x/y", "", ip("1.1.1.1"))).denied);
     }
 
     #[test]
     fn ipv6_and_mapped_ipv4() {
         let r = rules("Require ip 2001:db8::/32 10.0.0.0/8\n");
-        assert!(!decide(&[&r], "/", "", ip("2001:db8::1")).denied);
-        assert!(!decide(&[&r], "/", "", ip("::ffff:10.1.1.1")).denied);
-        assert!(decide(&[&r], "/", "", ip("2001:db9::1")).denied);
+        assert!(!decide(&[&r], &plain("/", "", ip("2001:db8::1"))).denied);
+        assert!(!decide(&[&r], &plain("/", "", ip("::ffff:10.1.1.1"))).denied);
+        assert!(decide(&[&r], &plain("/", "", ip("2001:db9::1"))).denied);
     }
 
     #[test]
     fn expires_by_type_default_and_child_override() {
         let parent = rules("ExpiresActive On\nExpiresByType image/png \"access plus 1 year\"\nExpiresByType text/* A60\nExpiresDefault \"access plus 1 month\"\n");
         let child = rules("ExpiresByType image/png \"access plus 1 day\"\n");
-        let d = decide(&[&parent, &child], "/a.png", "a.png", None);
+        let d = decide(&[&parent, &child], &plain("/a.png", "a.png", None));
         assert_eq!(d.expires.seconds_for("image/png"), Some(86_400));
         assert_eq!(d.expires.seconds_for("text/css; charset=utf-8"), Some(60));
         assert_eq!(d.expires.seconds_for("application/pdf"), Some(2_592_000));
         let off = rules("ExpiresActive Off\nExpiresDefault A60\n");
-        assert_eq!(decide(&[&off], "/", "", None).expires.seconds_for("text/html"), None);
+        assert_eq!(decide(&[&off], &plain("/", "", None)).expires.seconds_for("text/html"), None);
     }
 
     #[test]
     fn rewrite_rules_are_left_to_openlitespeed() {
         let r = rules("RewriteEngine On\nRewriteBase /\nRewriteRule ^index\\.php$ - [L]\n");
         assert!(r.notes.is_empty());
-        let d = decide(&[&r], "/", "", None);
+        let d = decide(&[&r], &plain("/", "", None));
         assert!(d.headers.is_empty() && d.redirect.is_none() && !d.denied);
+    }
+
+    #[test]
+    fn setenv_and_header_env_conditions() {
+        let r = rules("SetEnv NO_CACHE 1\nHeader set X-Cache \"off\" env=NO_CACHE\nHeader set X-Other \"y\" env=!NO_CACHE\n");
+        let d = decide(&[&r], &plain("/", "", None));
+        assert_eq!(d.env, [("NO_CACHE".to_string(), "1".to_string())]);
+        assert_eq!(d.headers.iter().map(|h| h.name.as_str()).collect::<Vec<_>>(), ["X-Cache"]);
+
+        // Without the variable the negated condition is the one that applies.
+        let only_negated = rules("Header set X-Other \"y\" env=!NO_CACHE\n");
+        let d = decide(&[&only_negated], &plain("/", "", None));
+        assert_eq!(d.headers.len(), 1);
+    }
+
+    #[test]
+    fn setenvif_matches_request_headers_and_unsetenv_removes_them() {
+        let r = rules("SetEnvIf X-Forwarded-For \"^10\\.\" INTERNAL\nSetEnvIf Request_URI \"^/admin\" IS_ADMIN\n");
+        let internal = {
+            let h = one_header("X-Forwarded-For", "10.2.3.4");
+            decide(&[&r], &with_header("/shop", ip("1.1.1.1"), &h))
+        };
+        assert!(internal.env.iter().any(|(n, _)| n == "INTERNAL"));
+        assert!(!internal.env.iter().any(|(n, _)| n == "IS_ADMIN"));
+
+        let admin = decide(&[&r], &plain("/admin/x", "", None));
+        assert!(admin.env.iter().any(|(n, v)| n == "IS_ADMIN" && v == "1"));
+
+        let cleared = rules("SetEnv KEEP 1\nUnsetEnv KEEP\n");
+        assert!(decide(&[&cleared], &plain("/", "", None)).env.is_empty());
+    }
+
+    #[test]
+    fn setenvifnocase_and_browsermatch() {
+        let r = rules("SetEnvIfNoCase User-Agent \"wordpress\" WP\nBrowserMatch \"^curl/\" CLI\n");
+        let d = {
+            let h = one_header("User-Agent", "Mozilla/5.0 WordPress/6.5");
+            decide(&[&r], &with_header("/", None, &h))
+        };
+        assert!(d.env.iter().any(|(n, _)| n == "WP"), "{:?} {:?}", d.env, r.notes);
+        let curl = {
+            let h = one_header("User-Agent", "curl/8.5.0");
+            decide(&[&r], &with_header("/", None, &h))
+        };
+        assert!(curl.env.iter().any(|(n, _)| n == "CLI"));
+    }
+
+    #[test]
+    fn negated_setenvif_sets_only_when_the_pattern_misses() {
+        let r = rules("SetEnvIf User-Agent \"bot\" !HUMAN\n");
+        assert!({
+            let h = one_header("User-Agent", "bot");
+            decide(&[&r], &with_header("/", None, &h))
+        }.env.is_empty());
+        let human = {
+            let h = one_header("User-Agent", "Mozilla");
+            decide(&[&r], &with_header("/", None, &h))
+        };
+        assert!(human.env.iter().any(|(n, _)| n == "HUMAN"));
+    }
+
+    #[test]
+    fn php_values_and_flags_compile() {
+        let r = rules("php_value memory_limit 768M\nphp_value upload_max_filesize 150M\nphp_flag display_errors Off\nphp_flag engine 0\n");
+        assert!(r.notes.is_empty(), "{:?}", r.notes);
+        let d = decide(&[&r], &plain("/", "", None));
+        assert_eq!(d.php.values, [("memory_limit".into(), "768M".into()), ("upload_max_filesize".into(), "150M".into())]);
+        assert_eq!(d.php.flags, [("display_errors".into(), false), ("engine".into(), false)]);
+    }
+
+    #[test]
+    fn errordocument_takes_paths_and_reports_urls_and_text() {
+        let r = rules("ErrorDocument 404 /not-found.html\nErrorDocument 403 \"Access denied\"\nErrorDocument 500 https://example.com/oops\n");
+        let d = decide(&[&r], &plain("/", "", None));
+        assert_eq!(d.errordocs, [ErrorDocument { code: 404, target: "/not-found.html".into() }]);
+        // A URL or a text body needs a response hatch cannot write, so both are reported.
+        assert_eq!(r.notes.len(), 2);
+        // The deepest file wins for the same code.
+        let child = rules("ErrorDocument 404 /child-404.html\n");
+        let merged = decide(&[&r, &child], &plain("/", "", None));
+        assert_eq!(merged.errordocs.iter().filter(|d| d.code == 404).count(), 1);
+        assert_eq!(merged.errordocs.iter().find(|d| d.code == 404).unwrap().target, "/child-404.html");
+    }
+
+    #[test]
+    fn options_indexes_only_touches_listing() {
+        let r = rules("Options -Indexes\n");
+        assert!(r.notes.is_empty(), "{:?}", r.notes);
+        assert_eq!(decide(&[&r], &plain("/", "", None)).indexes, Some(false));
+        let plus = rules("Options +Indexes\n");
+        assert_eq!(decide(&[&plus], &plain("/", "", None)).indexes, Some(true));
+        // Unrelated options are reported and do not change the listing setting.
+        let mixed = rules("Options -Indexes -FollowSymLinks\n");
+        assert_eq!(mixed.notes.len(), 1);
+        assert_eq!(decide(&[&mixed], &plain("/", "", None)).indexes, Some(false));
     }
 }

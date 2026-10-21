@@ -1,0 +1,3 @@
+php_value memory_limit 768M
+php_flag display_errors Off
+Header set X-Hatch-Php "on"

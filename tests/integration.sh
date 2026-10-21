@@ -92,6 +92,35 @@ check "Redirect gone"                    '410'                              "$(c
 check "native RewriteRule still works"   'page'                             "$(curl -s "$B/rw")"
 check "broken .htaccess is skipped"      '200'                              "$(code /broken/)"
 
+# SetEnvIf reads a request header, and Header env= follows what the same request set.
+check "SetEnvIf matches a request header" 'x-hatch-env: on'                 "$(curl -s -D - -o /dev/null -H 'X-Hatch-Test: yes' "$B/env/" | tr -d '\r' | tr 'A-Z' 'a-z')"
+check "SetEnvIfNoCase ignores case"      'x-hatch-ua: on'                    "$(curl -s -D - -o /dev/null -H 'User-Agent: hatchprobe/1.0' "$B/env/" | tr -d '\r' | tr 'A-Z' 'a-z')"
+check "negated env= applies when unset"  'x-hatch-negated: on'              "$(headers /env/)"
+check "env= drops when its variable is set" '' "$(curl -s -D - -o /dev/null -H 'X-Hatch-Test: yes' "$B/env/" | tr -d '\r' | tr 'A-Z' 'a-z' | grep -c 'x-hatch-negated' | sed 's/^0$//;s/^1$/unexpected header/')"
+
+check "Options -Indexes denies a listing" '403'                            "$(code /noindex/)"
+check "ErrorDocument serves the custom page" 'custom not found'            "$(curl -s "$B/errdoc/missing")"
+check "ErrorDocument keeps the 404 status" '404'                           "$(code /errdoc/missing)"
+check "ErrorDocument covers a denial"      'custom forbidden'              "$(curl -s "$B/errdoc403/secret.txt")"
+check "denial keeps the 403 status"        '403'                          "$(code /errdoc403/secret.txt)"
+
+# SetEnv reaches the backend, so PHP sees the same variables rewrite rules do.
+if [ "$(curl -s "$B/env/show.php")" = gold ]; then
+  check "SetEnv reaches PHP"               'gold'                           "$(curl -s "$B/env/show.php")"
+else
+  echo "  skip  SetEnv in PHP (no PHP handler on this server)"
+fi
+
+# php_value needs CyberPanel's core, which carries the php members in its table.
+if [ "${HATCH_CYBERPANEL:-0}" = 1 ]; then
+  check "php_value is accepted"          'x-hatch-php: on'                 "$(headers /php/)"
+  check "php_value reaches the backend"  '768M'                            "$(curl -s "$B/php/index.php")"
+else
+  check "php_value is reported, not fatal" 'x-hatch-php: on'               "$(headers /php/)"
+  # Without the php members the .htaccess value must not reach the backend.
+  check "php_value is not applied here"  ''                               "$(curl -s "$B/php/index.php" | grep -o '^768M' | sed 's/^768M$/unexpected memory_limit/')"
+fi
+
 if [ "$(curl -s "$B/hx/plain.php")" = plain ]; then
   check "PHP keeps its own Cache-Control"  'cache-control: no-store, private' "$(headers /hx/nocache.php)"
   check "PHP without one gets the expiry" 'cache-control: max-age=2592000'   "$(headers /hx/plain.php)"
