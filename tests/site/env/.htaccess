@@ -1,0 +1,6 @@
+SetEnv HATCH_TIER gold
+SetEnvIf X-Hatch-Test "^yes$" HATCH_FLAG
+SetEnvIfNoCase User-Agent "hatchprobe" HATCH_UA
+Header set X-Hatch-Env "on" env=HATCH_FLAG
+Header set X-Hatch-Negated "on" env=!HATCH_FLAG
+Header set X-Hatch-Ua "on" env=HATCH_UA

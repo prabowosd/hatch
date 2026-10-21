@@ -24,12 +24,20 @@ pub struct Api {
     pub get_req_uri: unsafe extern "C" fn(*const lsi_session_t, *mut c_int) -> *const c_char,
     pub get_client_ip: unsafe extern "C" fn(*const lsi_session_t, *mut c_int) -> *const c_char,
     pub get_req_var_by_id: unsafe extern "C" fn(*const lsi_session_t, c_int, *mut c_char, c_int) -> c_int,
+    pub get_req_env: unsafe extern "C" fn(*const lsi_session_t, *const c_char, c_uint, *mut c_char, c_int) -> c_int,
+    pub set_req_env: unsafe extern "C" fn(*const lsi_session_t, *const c_char, c_uint, *const c_char, c_int),
+    pub get_req_header: unsafe extern "C" fn(*const lsi_session_t, *const c_char, c_int, *mut c_int) -> *const c_char,
     pub get_uri_file_path: unsafe extern "C" fn(*const lsi_session_t, *const c_char, c_int, *mut c_char, c_int) -> c_int,
+    pub set_uri_qs: unsafe extern "C" fn(*const lsi_session_t, c_int, *const c_char, c_int, *const c_char, c_int) -> c_int,
     pub set_status_code: unsafe extern "C" fn(*const lsi_session_t, c_int),
+    pub get_status_code: unsafe extern "C" fn(*const lsi_session_t) -> c_int,
     pub set_resp_header: unsafe extern "C" fn(*const lsi_session_t, c_uint, *const c_char, c_int, *const c_char, c_int, c_int) -> c_int,
     pub get_resp_header: unsafe extern "C" fn(*const lsi_session_t, c_uint, *const c_char, c_int, *mut iovec, c_int) -> c_int,
     pub remove_resp_header: unsafe extern "C" fn(*const lsi_session_t, c_uint, *const c_char, c_int) -> c_int,
     pub get_req_handler_type: unsafe extern "C" fn(*const lsi_session_t) -> *const c_char,
+    /// CyberPanel's core only: the three php members sit right after `set_req_env`.
+    pub set_php_config_value: Option<unsafe extern "C" fn(*const lsi_session_t, *const c_char, *const c_char, c_int) -> c_int>,
+    pub set_php_config_flag: Option<unsafe extern "C" fn(*const lsi_session_t, *const c_char, c_int, c_int) -> c_int>,
 }
 
 /// Why the table could not be read, for the log line in `init`.
@@ -59,14 +67,31 @@ impl Api {
             get_req_uri: entry(table, 27, shift, "get_req_uri")?,
             get_client_ip: entry(table, 44, shift, "get_client_ip")?,
             get_req_var_by_id: entry(table, 46, shift, "get_req_var_by_id")?,
+            get_req_env: entry(table, 47, shift, "get_req_env")?,
+            set_req_env: entry(table, 48, shift, "set_req_env")?,
+            get_req_header: entry(table, 24, shift, "get_req_header")?,
             get_uri_file_path: entry(table, 50, shift, "get_uri_file_path")?,
+            set_uri_qs: entry(table, 51, shift, "set_uri_qs")?,
             set_status_code: entry(table, 65, shift, "set_status_code")?,
+            get_status_code: entry(table, 66, shift, "get_status_code")?,
             set_resp_header: entry(table, 77, shift, "set_resp_header")?,
             get_resp_header: entry(table, 80, shift, "get_resp_header")?,
             remove_resp_header: entry(table, 84, shift, "remove_resp_header")?,
             get_req_handler_type: entry(table, 89, shift, "get_req_handler_type")?,
+            // Only CyberPanel's core carries these, at the slots it inserts after set_req_env.
+            set_php_config_value: optional(table, 49, shift),
+            set_php_config_flag: optional(table, 50, shift),
         })
     }
+}
+
+/// A member a core may not have. CyberPanel's php members sit at fixed absolute slots.
+unsafe fn optional<F>(table: *const usize, index: usize, shift: usize) -> Option<F> {
+    if shift == 0 {
+        return None;
+    }
+    let addr = *table.add(index);
+    (addr != 0).then(|| std::mem::transmute_copy(&addr))
 }
 
 /// Where a stock index lands once the core's own members are accounted for.
@@ -206,6 +231,24 @@ mod tests {
         assert_eq!(api.get_resp_header as usize, stock[80]);
         assert_eq!(api.remove_resp_header as usize, stock[84]);
         assert_eq!(api.get_req_handler_type as usize, stock[89]);
+    }
+
+    #[test]
+    fn reads_the_cyberpanel_php_members() {
+        let stock = table();
+        let mut shifted = vec![0usize; 140];
+        shifted[..=SHIFT_AFTER].copy_from_slice(&stock[..=SHIFT_AFTER]);
+        // The php members land at the slots CyberPanel inserts them into.
+        shifted[49] = 9001;
+        shifted[50] = 9002;
+        shifted[51] = 9003;
+        shifted[SHIFT_AFTER + 4..].copy_from_slice(&stock[SHIFT_AFTER + 1..137]);
+        let api = unsafe { Api::read(shifted.as_ptr(), CYBERPANEL_SHIFT) }.ok().expect("cyberpanel layout");
+        assert_eq!(api.set_php_config_value.map(|f| f as usize), Some(9001));
+        assert_eq!(api.set_php_config_flag.map(|f| f as usize), Some(9002));
+        // The stock layout has no php members, whatever sits at those offsets.
+        let stock_api = unsafe { Api::read(stock.as_ptr(), 0) }.ok().expect("stock layout");
+        assert!(stock_api.set_php_config_value.is_none() && stock_api.set_php_config_flag.is_none());
     }
 
     #[test]

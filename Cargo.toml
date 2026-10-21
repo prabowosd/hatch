@@ -1,6 +1,6 @@
 [package]
 name = "hatch"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 license = "GPL-3.0-or-later"
 description = "Apache .htaccess compatibility module for OpenLiteSpeed"
@@ -10,7 +10,8 @@ repository = "https://github.com/prabowosd/hatch"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-regex = { version = "1", default-features = false, features = ["std", "perf", "unicode-perl"] }
+# unicode-case is what case_insensitive(true) needs; without it SetEnvIfNoCase cannot compile.
+regex = { version = "1", default-features = false, features = ["std", "perf", "unicode-perl", "unicode-case"] }
 
 [build-dependencies]
 bindgen = "0.71"

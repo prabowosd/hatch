@@ -21,7 +21,12 @@ OpenLiteSpeed reads `RewriteRule` from `.htaccess` on its own, but ignores every
 
 | Directive | Notes |
 |---|---|
-| `Header set\|append\|merge\|add\|unset` | `always` and `onsuccess` accepted. `set` replaces values the server added itself. `env=` and `expr=` conditions are skipped for now. |
+| `Header set\|append\|merge\|add\|unset` | `always` and `onsuccess` accepted. `set` replaces values the server added itself. `env=name` and `env=!name` conditions apply; `expr=` is reported and ignored. |
+| `SetEnv`, `UnsetEnv` | Sets and clears request environment variables, so the backend and the rewrite engine see them. |
+| `SetEnvIf`, `SetEnvIfNoCase`, `BrowserMatch` | Matches a request header, `Request_URI`, `Request_Method`, `Remote_Addr`, `Remote_Host` or `Host`. `!var` and `var=value` are accepted. |
+| `php_value`, `php_admin_value`, `php_flag`, `php_admin_flag` | Needs CyberPanel's OpenLiteSpeed core, whose API carries the php config calls. On other cores the line is logged once and skipped. |
+| `ErrorDocument` | A path target, for 404 and for a denied request. The page is served through an internal redirect and keeps the original status. URL and text targets need a body hatch cannot write, so they are logged and skipped. |
+| `Options -Indexes` | A directory with no index file answers 403 instead of listing its contents. `+Indexes` restores the server default. |
 | `Redirect`, `RedirectPermanent`, `RedirectTemp` | Prefix match that keeps the rest of the path, like mod_alias. Status words `permanent`, `temp`, `seeother`, `gone`. |
 | `RedirectMatch` | Regex with `$1`..`$9`. Targets must be a path or an `http(s)` URL. |
 | `Order`, `Allow from`, `Deny from` | Apache 2.2 semantics, IPv4, IPv6, CIDR and partial addresses (`10.1`). |
@@ -31,7 +36,9 @@ OpenLiteSpeed reads `RewriteRule` from `.htaccess` on its own, but ignores every
 | `ExpiresActive`, `ExpiresDefault`, `ExpiresByType` | `access plus N unit` and `A<seconds>` forms, `type/*` wildcards. Like mod_expires, a PHP or proxied response that sets its own `Cache-Control` or `Expires` keeps it; `Header set Cache-Control` still wins over expiry. |
 | `RewriteEngine`, `RewriteRule`, `RewriteCond`, `RewriteBase` | Left to OpenLiteSpeed, untouched. |
 
-Next (v0.2): Basic Auth (`AuthType`, `AuthUserFile`, `Require valid-user`), `ErrorDocument`, `php_value`/`php_flag`, `DirectoryIndex`, `Header ... env=`.
+`RequestHeader` cannot be implemented: LSIAPI can read a request header but has no call that changes one. The line is logged and skipped.
+
+Next (v0.2): Basic Auth (`AuthType`, `AuthUserFile`, `Require valid-user`), `DirectoryIndex`.
 
 Unsupported directives are logged once per file change and skipped; they never break the site.
 
