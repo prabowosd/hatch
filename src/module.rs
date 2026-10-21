@@ -385,10 +385,12 @@ unsafe extern "C" fn on_send_resp_header(param: *mut lsi_param_t) -> c_int {
             set_header(api, s, "Cache-Control", &format!("max-age={secs}"), LSI_HEADER_OP_LSI_HEADEROP_SET);
             set_header(api, s, "Expires", &http_date(SystemTime::now() + Duration::from_secs(secs)), LSI_HEADER_OP_LSI_HEADEROP_SET);
         }
-        // AddDefaultCharset only fills in a missing charset; an explicit one wins.
+        // Like mod_mime, AddDefaultCharset only touches text/plain and text/html.
         if let Some(charset) = d.default_charset.as_deref().filter(|c| !c.is_empty()) {
             let ct = content_type(api, s);
-            if !ct.is_empty() && !ct.to_ascii_lowercase().contains("charset=") {
+            let base = ct.split(';').next().unwrap_or("").trim();
+            let is_text = base.eq_ignore_ascii_case("text/plain") || base.eq_ignore_ascii_case("text/html");
+            if is_text && !ct.to_ascii_lowercase().contains("charset=") {
                 set_header(api, s, "Content-Type", &format!("{ct}; charset={charset}"), LSI_HEADER_OP_LSI_HEADEROP_SET);
             }
         }

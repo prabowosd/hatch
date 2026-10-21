@@ -30,7 +30,23 @@ pub fn split_args(text: &str) -> Vec<String> {
     while let Some(c) = chars.next() {
         match (quote, c) {
             (_, '\\') if chars.peek().is_some() => {
-                current.push(chars.next().unwrap());
+                let next = *chars.peek().unwrap();
+                // Only a quote or a backslash is unescaped; regex escapes such as \. are kept.
+                match (quote, next) {
+                    (Some(q), n) if n == q => {
+                        chars.next();
+                        current.push(n);
+                    }
+                    (_, '\\') => {
+                        chars.next();
+                        current.push('\\');
+                    }
+                    (None, n) if n.is_whitespace() => {
+                        chars.next();
+                        current.push(n);
+                    }
+                    _ => current.push('\\'),
+                }
                 started = true;
             }
             (Some(q), c) if c == q => quote = None,
@@ -132,6 +148,15 @@ mod tests {
     fn quotes_and_escapes() {
         assert_eq!(split_args(r#"set X-A "a b" 'c d' e\ f"#), ["set", "X-A", "a b", "c d", "e f"]);
         assert_eq!(split_args(r#"set X ''"#), ["set", "X", ""]);
+    }
+
+    #[test]
+    fn regex_backslashes_survive_tokenizing() {
+        // A stripped backslash turns ^\. into ^. and makes FilesMatch match every file.
+        assert_eq!(split_args(r#""^\.""#), [r#"^\."#]);
+        assert_eq!(split_args(r#""\.(bak|sql)$""#), [r#"\.(bak|sql)$"#]);
+        // Quotes and a literal backslash are still unescaped.
+        assert_eq!(split_args(r#""a\"b" "c\\d""#), ["a\"b", r"c\d"]);
     }
 
     #[test]
