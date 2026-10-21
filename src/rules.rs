@@ -89,6 +89,8 @@ pub struct Access {
     require_granted: Option<bool>,
     require_ip: Vec<Net>,
     require_not_ip: Vec<Net>,
+    /// `Satisfy Any`: host rules and auth rules combine with OR instead of AND.
+    satisfy_any: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -107,6 +109,8 @@ enum FileMatch {
 #[derive(Debug, Clone)]
 pub struct Section {
     files: FileMatch,
+    /// `<Limit>`/`<LimitExcept>`: `(except, methods)`; None applies to every method.
+    limit: Option<(bool, Vec<String>)>,
     pub headers: Vec<HeaderOp>,
     access: Access,
     pub expires: Expires,
@@ -114,6 +118,9 @@ pub struct Section {
     pub php: Php,
     pub errordocs: Vec<ErrorDocument>,
     pub options_indexes: Option<bool>,
+    /// `AddDefaultCharset`: None unset, Some("") means Off, Some(s) is the charset.
+    pub default_charset: Option<String>,
+    pub ssl_require: bool,
 }
 
 /// The compiled form of one .htaccess file.
@@ -137,6 +144,9 @@ pub struct Decision {
     pub errordocs: Vec<ErrorDocument>,
     /// `None` leaves the server's own directory listing setting alone.
     pub indexes: Option<bool>,
+    /// `None` leaves the response's content type alone; Some("") is AddDefaultCharset Off.
+    pub default_charset: Option<String>,
+    pub ssl_require: bool,
 }
 
 const MAX_REGEX: usize = 1 << 20;
@@ -302,6 +312,7 @@ impl Compiler {
                 };
                 self.rules.sections.push(Section {
                     files: FileMatch::Name(compiled),
+                    limit: None,
                     headers: Vec::new(),
                     access: Access::default(),
                     expires: Expires::default(),
@@ -309,6 +320,31 @@ impl Compiler {
                     php: Php::default(),
                     errordocs: Vec::new(),
                     options_indexes: None,
+                    default_charset: None,
+                    ssl_require: false,
+                });
+                let index = self.rules.sections.len() - 1;
+                self.walk(children, index);
+            }
+            kind @ ("limit" | "limitexcept") => {
+                let methods: Vec<String> = args.iter().map(|m| m.to_ascii_uppercase()).collect();
+                if methods.is_empty() {
+                    return self.note(line, format!("<{name}> needs at least one method"));
+                }
+                // A Limit block inherits the enclosing Files/FilesMatch filter.
+                let files = self.rules.sections[section].files.clone();
+                self.rules.sections.push(Section {
+                    files,
+                    limit: Some((kind == "limitexcept", methods)),
+                    headers: Vec::new(),
+                    access: Access::default(),
+                    expires: Expires::default(),
+                    env: Env::default(),
+                    php: Php::default(),
+                    errordocs: Vec::new(),
+                    options_indexes: None,
+                    default_charset: None,
+                    ssl_require: false,
                 });
                 let index = self.rules.sections.len() - 1;
                 self.walk(children, index);
@@ -402,6 +438,25 @@ impl Compiler {
             }
             "errordocument" => self.error_document(args, line, s),
             "options" => self.options(args, line, s),
+            "satisfy" => {
+                let value = args.first().map(|a| a.to_ascii_lowercase());
+                self.rules.sections[s].access.satisfy_any = match value.as_deref() {
+                    Some("any") => true,
+                    Some("all") => false,
+                    _ => return self.note(line, "Satisfy must be Any or All"),
+                };
+            }
+            "adddefaultcharset" => {
+                let value = args.first().cloned().unwrap_or_default();
+                if value.eq_ignore_ascii_case("off") {
+                    self.rules.sections[s].default_charset = Some(String::new());
+                } else if !value.is_empty() && value_ok(&value) {
+                    self.rules.sections[s].default_charset = Some(value);
+                } else {
+                    self.note(line, "AddDefaultCharset needs a charset or Off");
+                }
+            }
+            "sslrequiressl" => self.rules.sections[s].ssl_require = true,
             other => self.note(line, format!("{other} is not supported yet, ignored")),
         }
     }
@@ -505,6 +560,9 @@ impl Compiler {
             };
             if name.eq_ignore_ascii_case("indexes") {
                 self.rules.sections[s].options_indexes = Some(on);
+                touched = true;
+            } else if ["followsymlinks", "symlinksifownermatch", "multiviews"].iter().any(|o| name.eq_ignore_ascii_case(o)) {
+                // The server owns symlink and content-negotiation behaviour; accept the option quietly.
                 touched = true;
             } else {
                 self.note(line, format!("Options {name} is not supported yet, ignored"));
@@ -610,6 +668,7 @@ impl Rules {
     pub fn compile(nodes: &[Node]) -> Rules {
         let root = Section {
             files: FileMatch::Any,
+            limit: None,
             headers: Vec::new(),
             access: Access::default(),
             expires: Expires::default(),
@@ -617,6 +676,8 @@ impl Rules {
             php: Php::default(),
             errordocs: Vec::new(),
             options_indexes: None,
+            default_charset: None,
+            ssl_require: false,
         };
         let mut compiler = Compiler { rules: Rules { sections: vec![root], ..Default::default() } };
         compiler.walk(nodes, 0);
@@ -626,24 +687,43 @@ impl Rules {
 
 impl Access {
     fn is_set(&self) -> bool {
-        self.order.is_some() || !self.allow.is_empty() || !self.deny.is_empty() || self.require_granted.is_some()
-            || !self.require_ip.is_empty() || !self.require_not_ip.is_empty()
+        self.has_host() || self.has_require()
     }
 
-    fn denies(&self, ip: Option<&IpAddr>) -> bool {
+    fn has_host(&self) -> bool {
+        self.order.is_some() || !self.allow.is_empty() || !self.deny.is_empty()
+    }
+
+    fn has_require(&self) -> bool {
+        self.require_granted.is_some() || !self.require_ip.is_empty() || !self.require_not_ip.is_empty()
+    }
+
+    fn host_denies(&self, ip: Option<&IpAddr>) -> bool {
         let hit = |nets: &[Net]| ip.is_some_and(|ip| nets.iter().any(|n| net_contains(n, ip)));
-        if self.require_granted.is_some() || !self.require_ip.is_empty() || !self.require_not_ip.is_empty() {
-            if hit(&self.require_not_ip) {
-                return true;
-            }
-            if !self.require_ip.is_empty() {
-                return !hit(&self.require_ip);
-            }
-            return self.require_granted == Some(false);
-        }
         match self.order.unwrap_or(Order::DenyAllow) {
             Order::DenyAllow => hit(&self.deny) && !hit(&self.allow),
             Order::AllowDeny => !hit(&self.allow) || hit(&self.deny),
+        }
+    }
+
+    fn require_denies(&self, ip: Option<&IpAddr>) -> bool {
+        let hit = |nets: &[Net]| ip.is_some_and(|ip| nets.iter().any(|n| net_contains(n, ip)));
+        if hit(&self.require_not_ip) {
+            return true;
+        }
+        if !self.require_ip.is_empty() {
+            return !hit(&self.require_ip);
+        }
+        self.require_granted == Some(false)
+    }
+
+    fn denies(&self, ip: Option<&IpAddr>) -> bool {
+        match (self.has_host(), self.has_require()) {
+            (true, false) => self.host_denies(ip),
+            (false, true) => self.require_denies(ip),
+            (true, true) if self.satisfy_any => self.host_denies(ip) && self.require_denies(ip),
+            (true, true) => self.host_denies(ip) || self.require_denies(ip),
+            (false, false) => false,
         }
     }
 }
@@ -729,12 +809,24 @@ pub fn decide(chain: &[&Rules], req: &Request) -> Decision {
             }
 
             decision.headers.extend(section.headers.iter().cloned());
-            if section.access.is_set() {
+            // `<Limit>`/`<LimitExcept>` limits the access rules to the listed methods.
+            let method_matches = match &section.limit {
+                None => true,
+                Some((except, methods)) => {
+                    let listed = methods.iter().any(|m| m.eq_ignore_ascii_case(req.method));
+                    if *except { !listed } else { listed }
+                }
+            };
+            if method_matches && section.access.is_set() {
                 access = Some(&section.access);
             }
             if let Some(indexes) = section.options_indexes {
                 decision.indexes = Some(indexes);
             }
+            if section.default_charset.is_some() {
+                decision.default_charset = section.default_charset.clone();
+            }
+            decision.ssl_require |= section.ssl_require;
             for doc in &section.errordocs {
                 decision.errordocs.retain(|d| d.code != doc.code);
                 decision.errordocs.push(doc.clone());
@@ -805,6 +897,11 @@ mod tests {
     /// A request with no headers, for tests that only care about paths and rules.
     fn plain<'a>(uri: &'a str, file_name: &'a str, client: Option<IpAddr>) -> Request<'a> {
         Request { uri, file_name, method: "GET", client, header: &|_| None }
+    }
+
+    /// A request with a chosen HTTP method, for `<Limit>` tests.
+    fn with_method<'a>(method: &'a str, client: Option<IpAddr>) -> Request<'a> {
+        Request { uri: "/", file_name: "", method, client, header: &|_| None }
     }
 
     /// A request carrying one request header, for SetEnvIf tests.
@@ -1008,9 +1105,50 @@ mod tests {
         assert_eq!(decide(&[&r], &plain("/", "", None)).indexes, Some(false));
         let plus = rules("Options +Indexes\n");
         assert_eq!(decide(&[&plus], &plain("/", "", None)).indexes, Some(true));
-        // Unrelated options are reported and do not change the listing setting.
-        let mixed = rules("Options -Indexes -FollowSymLinks\n");
-        assert_eq!(mixed.notes.len(), 1);
+        // Symlink and content-negotiation options are accepted quietly.
+        let mixed = rules("Options -Indexes -FollowSymLinks -MultiViews +SymLinksIfOwnerMatch\n");
+        assert!(mixed.notes.is_empty(), "{:?}", mixed.notes);
         assert_eq!(decide(&[&mixed], &plain("/", "", None)).indexes, Some(false));
+        // An option hatch truly does not know is still reported.
+        let unknown = rules("Options -Indexes -ExecCGI\n");
+        assert_eq!(unknown.notes.len(), 1);
+    }
+
+    #[test]
+    fn limit_applies_access_only_to_the_listed_methods() {
+        let r = rules("<Limit POST>\nRequire all denied\n</Limit>\n");
+        assert!(!decide(&[&r], &with_method("GET", ip("1.1.1.1"))).denied);
+        assert!(decide(&[&r], &with_method("POST", ip("1.1.1.1"))).denied);
+
+        let except = rules("<LimitExcept GET HEAD>\nRequire all denied\n</LimitExcept>\n");
+        assert!(!decide(&[&except], &with_method("GET", ip("1.1.1.1"))).denied);
+        assert!(decide(&[&except], &with_method("PUT", ip("1.1.1.1"))).denied);
+    }
+
+    #[test]
+    fn satisfy_combines_host_and_require_rules() {
+        let any = rules("Order Deny,Allow\nDeny from all\nRequire all granted\nSatisfy Any\n");
+        assert!(!decide(&[&any], &plain("/", "", ip("1.1.1.1"))).denied);
+        let all = rules("Order Deny,Allow\nDeny from all\nRequire all granted\nSatisfy All\n");
+        assert!(decide(&[&all], &plain("/", "", ip("1.1.1.1"))).denied);
+        // Host rules alone still apply without a Satisfy line.
+        let host = rules("Order Deny,Allow\nDeny from all\n");
+        assert!(decide(&[&host], &plain("/", "", ip("1.1.1.1"))).denied);
+    }
+
+    #[test]
+    fn adddefaultcharset_and_sslrequiressl() {
+        let r = rules("AddDefaultCharset UTF-8\nSSLRequireSSL\n");
+        let d = decide(&[&r], &plain("/", "", None));
+        assert_eq!(d.default_charset, Some("UTF-8".into()));
+        assert!(d.ssl_require);
+
+        let off = rules("AddDefaultCharset Off\n");
+        assert_eq!(decide(&[&off], &plain("/", "", None)).default_charset, Some(String::new()));
+
+        // The deepest file wins for the charset.
+        let parent = rules("AddDefaultCharset UTF-8\n");
+        let child = rules("AddDefaultCharset ISO-8859-1\n");
+        assert_eq!(decide(&[&parent, &child], &plain("/", "", None)).default_charset, Some("ISO-8859-1".into()));
     }
 }
