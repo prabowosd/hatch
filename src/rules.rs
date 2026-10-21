@@ -377,9 +377,10 @@ impl Compiler {
             // The LSIAPI table can read a request header but has no call to change one.
             "requestheader" => self.note(line, "RequestHeader is not available in LSIAPI, ignored"),
             "php_value" | "php_admin_value" => {
-                let Some((name, _)) = args.split_first() else {
-                    return self.note(line, format!("{name} needs a name and a value"));
-                };
+                if args.len() < 2 {
+                    return self.note(line, "php_value needs a name and a value");
+                }
+                let name = &args[0];
                 if !php_name_ok(name) || !value_ok(&args[1..].join(" ")) {
                     return self.note(line, format!("{name} has an unusable name or value"));
                 }
@@ -461,13 +462,14 @@ impl Compiler {
             return self.note(line, format!("{name} pattern {pattern:?} is not supported"));
         };
         let attribute = attribute.to_ascii_lowercase();
-        if !matches!(attribute.as_str(), "request_uri" | "request_method" | "remote_host" | "remote_addr" | "user-agent" | "referer" | "host") {
-            // Any other name is a request header, checked the same way Header checks names.
-            let bare = attribute.strip_prefix("http_").unwrap_or(&attribute);
-            if !header_name_ok(bare) {
+        // `http_` names a request header; store the bare header name so the lookup matches.
+        let stored = attribute.strip_prefix("http_").unwrap_or(&attribute).to_string();
+        if !matches!(stored.as_str(), "request_uri" | "request_method" | "remote_host" | "remote_addr" | "user-agent" | "referer" | "host") {
+            if !header_name_ok(&stored) {
                 return self.note(line, format!("{name} attribute {attribute:?} is not supported"));
             }
         }
+        let attribute = stored;
         let mut added = false;
         for spec in rest {
             let (set, value, negate) = match spec.split_once('=') {
@@ -585,7 +587,8 @@ impl Compiler {
             _ => return self.note(line, "Redirect target must be a path or an http(s) URL, ignored"),
         };
         let Some(pattern) = regex(&pattern, false) else { return };
-        self.rules.redirects.push(Redirect { pattern, target, status, keeps_tail: !source.is_empty() });
+        // Redirect is a prefix match, so the rest of the path is always kept, even for "/".
+        self.rules.redirects.push(Redirect { pattern, target, status, keeps_tail: true });
     }
 
     fn redirect_match(&mut self, args: &[String], line: usize) {
