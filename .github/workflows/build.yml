@@ -63,6 +63,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: hatch-${{ matrix.arch }}
+      - name: Installer watcher tests
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq inotify-tools
+          bash tests/watch.sh
       - name: Real OpenLiteSpeed
         run: bash tests/integration.sh hatch-${{ matrix.arch }}-linux-gnu.so
 

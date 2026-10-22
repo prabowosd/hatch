@@ -5,6 +5,7 @@
 #   sudo bash install.sh --file ./hatch.so     install a local build
 #   sudo bash install.sh --version v0.1.0      pin a release
 #   sudo bash install.sh --no-guard            skip the Webuzo config guard
+#   sudo bash install.sh --no-watch            skip the Webuzo .htaccess watcher
 #   sudo bash install.sh --status | --uninstall
 #
 # Every change is backed up first; if OpenLiteSpeed does not come back with the
@@ -17,12 +18,15 @@ CONF="$LSWS/conf/httpd_config.conf"
 MODULE="$LSWS/modules/hatch.so"
 GUARD="/usr/local/bin/hatch-guard"
 GUARD_CRON="/etc/cron.d/hatch-guard"
+WATCH="/usr/local/bin/hatch-reload"
+WATCH_UNIT="/etc/systemd/system/hatch-reload.service"
 WEBUZO_HOME="${WEBUZO_HOME:-/usr/local/webuzo}"
 BACKUP_DIR="/var/lib/hatch/install-backups/$(date +%Y%m%d-%H%M%S)"
 VERSION="latest"
 FILE=""
 ACTION="install"
 NO_GUARD=0
+NO_WATCH=0
 
 say() { printf '\033[1m[hatch]\033[0m %s\n' "$*"; }
 die() { printf '\033[31m[hatch] %s\033[0m\n' "$*" >&2; exit 1; }
@@ -32,9 +36,10 @@ while [ $# -gt 0 ]; do
     --file) FILE="${2:?--file needs a path}"; shift 2 ;;
     --version) VERSION="${2:?--version needs a tag}"; shift 2 ;;
     --no-guard) NO_GUARD=1; shift ;;
+    --no-watch) NO_WATCH=1; shift ;;
     --uninstall) ACTION="uninstall"; shift ;;
     --status) ACTION="status"; shift ;;
-    -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
 done
@@ -84,6 +89,116 @@ GUARD_SCRIPT
 
 remove_guard() { rm -f "$GUARD_CRON" "$GUARD"; }
 
+install_watch() {
+  # OpenLiteSpeed parses .htaccess at config load, so a rewrite edit waits for a
+  # reload. This service watches the document roots and reloads within seconds.
+  if ! command -v inotifywait >/dev/null 2>&1; then
+    say "inotify-tools is missing; skipping the .htaccess watcher (install inotify-tools, re-run)"
+    return 0
+  fi
+  cat > "$WATCH" <<'WATCH_SCRIPT'
+#!/bin/bash
+# hatch-reload: reload OpenLiteSpeed when a .htaccess file changes.
+set -u
+# HATCH_WATCH_BEGIN
+LSWS="${LSWS_HOME:-/usr/local/lsws}"
+TTL="${HATCH_RELOAD_TTL:-300}"
+DEBOUNCE="${HATCH_RELOAD_DEBOUNCE:-2}"
+MIN_INTERVAL="${HATCH_RELOAD_MIN_INTERVAL:-10}"
+LAST=0
+
+log() { logger -t hatch-reload -- "$*" 2>/dev/null || printf '[hatch-reload] %s\n' "$*" >&2; }
+
+docroots() {
+  grep -h '^[[:space:]]*docRoot' "$LSWS"/conf/webuzo_vh/*/vhost.conf 2>/dev/null | awk '{print $2}'
+  ls -d /home/*/public_html 2>/dev/null
+}
+
+reload() {
+  local wait
+  wait=$(( LAST + MIN_INTERVAL - $(date +%s) ))
+  [ "$wait" -gt 0 ] && sleep "$wait"
+  LAST=$(date +%s)
+  if "$LSWS/bin/lswsctrl" reload >/dev/null 2>&1; then
+    log "reloaded OpenLiteSpeed after a .htaccess change"
+  else
+    log "reload failed; the panel's own cron will retry"
+  fi
+}
+
+while :; do
+  mapfile -t ROOTS < <(docroots | sed 's:/*$::' | sort -u | while read -r d; do [ -d "$d" ] && printf '%s\n' "$d"; done)
+  if [ "${#ROOTS[@]}" -eq 0 ]; then
+    log "no document roots found; retrying in 30s"
+    sleep 30
+    continue
+  fi
+
+  DIR=$(mktemp -d "${TMPDIR:-/tmp}/hatch-reload.XXXXXX")
+  FIFO="$DIR/events"
+  mkfifo "$FIFO"
+  inotifywait -m -r -q -e close_write,create,moved_to,delete --format '%w%f' "${ROOTS[@]}" >"$FIFO" 2>/dev/null &
+  WATCHER=$!
+  exec 3<"$FIFO"
+
+  START=$(date +%s)
+  SAW=0
+  while :; do
+    IFS= read -r -t "$DEBOUNCE" -u 3 CHANGED
+    RC=$?
+    if [ "$RC" -eq 0 ]; then
+      case "$CHANGED" in */.htaccess) SAW=1 ;; esac
+      continue
+    fi
+    if [ "$RC" -le 128 ]; then
+      log "inotifywait stopped; restarting"
+      break
+    fi
+    if [ "$SAW" -eq 1 ]; then
+      SAW=0
+      reload
+    fi
+    [ $(( $(date +%s) - START )) -ge "$TTL" ] && break
+  done
+
+  exec 3<&-
+  kill "$WATCHER" 2>/dev/null
+  wait "$WATCHER" 2>/dev/null
+  rm -rf "$DIR"
+done
+# HATCH_WATCH_END
+WATCH_SCRIPT
+  chmod 0755 "$WATCH"
+  cat > "$WATCH_UNIT" <<'WATCH_UNIT_BODY'
+[Unit]
+Description=hatch: reload OpenLiteSpeed when a .htaccess changes
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/hatch-reload
+Restart=always
+RestartSec=5
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
+WATCH_UNIT_BODY
+  chmod 0644 "$WATCH_UNIT"
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  if systemctl enable --now hatch-reload.service >/dev/null 2>&1; then
+    say "Webuzo detected: hatch-reload installed, rewrite edits apply within seconds"
+  else
+    say "warning: hatch-reload could not be started; check systemctl status hatch-reload"
+  fi
+}
+
+remove_watch() {
+  systemctl disable --now hatch-reload.service >/dev/null 2>&1 || true
+  rm -f "$WATCH_UNIT" "$WATCH"
+  systemctl daemon-reload >/dev/null 2>&1 || true
+}
+
 loaded_since() {
   # True when the error log shows hatch initialised after the given timestamp.
   grep -a "Module: hatch" "$LSWS/logs/error.log" 2>/dev/null | awk -v t="$1" 'substr($0,1,19) >= t' | grep -q "initialized succe"
@@ -111,6 +226,11 @@ do_status() {
     else
       say "Webuzo: detected; no guard installed (run the installer to add it)"
     fi
+    if [ -x "$WATCH" ] && systemctl is-active --quiet hatch-reload.service 2>/dev/null; then
+      say "Webuzo: hatch-reload is running, .htaccess rewrite edits apply within seconds"
+    else
+      say "Webuzo: no .htaccess watcher running (run the installer to add it)"
+    fi
   fi
 }
 
@@ -122,6 +242,7 @@ do_uninstall() {
   fi
   [ -f "$MODULE" ] && mv "$MODULE" "$BACKUP_DIR/hatch.so"
   remove_guard
+  remove_watch
   restart || die "OpenLiteSpeed did not restart; config backup in $BACKUP_DIR"
   say "uninstalled; backup in $BACKUP_DIR"
 }
@@ -173,6 +294,7 @@ do_install() {
       say ".htaccess Header, Redirect, Require/Allow/Deny, Files and Expires directives are now applied"
       if is_webuzo; then
         if [ "$NO_GUARD" = 1 ]; then say "Webuzo detected; guard skipped (--no-guard)"; else install_guard; fi
+        if [ "$NO_WATCH" = 1 ]; then say "Webuzo detected; watcher skipped (--no-watch)"; else install_watch; fi
       fi
       return 0
     fi

@@ -13,7 +13,7 @@
 
 > **CyberPanel:** supported from v0.1.2. CyberPanel replaces OpenLiteSpeed with its own core (2.5.x) whose `lsi_api_t` carries three extra members; hatch detects that layout at load time. v0.1.1 and older crash the worker on the first request there, so upgrade before installing on a CyberPanel server.
 
-> **Webuzo:** supported. Webuzo ships a stock OpenLiteSpeed core, so the module needs no special build; the installer adds a guard that restores the `module hatch` block when Webuzo rewrites `httpd_config.conf`.
+> **Webuzo:** supported. Webuzo ships a stock OpenLiteSpeed core, so the module needs no special build; the installer adds a guard that restores the `module hatch` block when Webuzo rewrites `httpd_config.conf`, and a watcher that reloads OpenLiteSpeed within seconds of a `.htaccess` change.
 
 Apache `.htaccess` compatibility for OpenLiteSpeed, as an open source module written in Rust.
 
@@ -80,12 +80,17 @@ Webuzo 4.x runs a stock OpenLiteSpeed core, so hatch loads on it unchanged: ther
 
 What differs is who owns the config. Webuzo writes `httpd_config.conf` and every vhost under `conf/webuzo_vh/` from its own state — on a certificate renewal, a domain or account change, and sometimes from its own service check — so a `module hatch` block added by hand can disappear. When the installer sees Webuzo (`/usr/local/webuzo` or `conf/webuzo_vh/`), it also installs `/usr/local/bin/hatch-guard` with a one-minute entry in `/etc/cron.d/hatch-guard`. The guard puts the block back and restarts OpenLiteSpeed only when Webuzo has removed it; a config that still has the block is left alone.
 
+`RewriteRule` is the one family OpenLiteSpeed keeps for itself: it parses `.htaccess` at config load and caches the rules, so a rewrite edit waits for a reload. Webuzo compensates with a two-minute cron that reloads when a `.htaccess` is newer than `cgid`; CyberPanel does the same every three minutes. On Webuzo the installer also adds `hatch-reload`, a systemd service that watches the document roots from `conf/webuzo_vh/` with `inotifywait`, ignores every file except `.htaccess`, debounces two seconds, and reloads at most once every ten seconds. Rewrite edits apply within seconds instead of minutes, and the service re-reads the vhost list every five minutes so new sites are covered. It needs `inotify-tools`.
+
 ```sh
-sudo bash install.sh --no-guard   # skip the guard
-sudo bash install.sh --status     # shows whether Webuzo and the guard are present
+sudo bash install.sh --no-guard   # skip the config guard
+sudo bash install.sh --no-watch   # skip the .htaccess watcher
+sudo bash install.sh --status     # shows whether Webuzo, the guard and the watcher are present
 ```
 
-`php_value` and `php_flag` are logged and skipped on Webuzo's stock core, the same as on any OpenLiteSpeed build without CyberPanel's API.
+The directives hatch handles itself (`Header`, `Redirect`, `Require`, `FilesMatch`, `Expires` and the rest) never wait for a reload: they are read from `.htaccess` on each request, so an edit applies to the next request.
+
+`php_value` and `php_flag` are logged and skipped on Webuzo's stock core, the same as on any OpenLiteSpeed build without CyberPanel's API. OpenLiteSpeed has no module API for per-request PHP configuration; `phpIniOverride` in a vhost or `context` block is the static alternative, and Webuzo keeps per-domain files for it under `/var/webuzo-data/openlitespeed/custom/`.
 
 ## Docker
 
