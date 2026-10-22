@@ -13,6 +13,8 @@
 
 > **CyberPanel:** supported from v0.1.2. CyberPanel replaces OpenLiteSpeed with its own core (2.5.x) whose `lsi_api_t` carries three extra members; hatch detects that layout at load time. v0.1.1 and older crash the worker on the first request there, so upgrade before installing on a CyberPanel server.
 
+> **Webuzo:** supported. Webuzo ships a stock OpenLiteSpeed core, so the module needs no special build; the installer adds a guard that restores the `module hatch` block when Webuzo rewrites `httpd_config.conf`.
+
 Apache `.htaccess` compatibility for OpenLiteSpeed, as an open source module written in Rust.
 
 OpenLiteSpeed reads `RewriteRule` from `.htaccess` on its own, but ignores everything else (`Header`, `Redirect`, `Require`, `<FilesMatch>` and friends). hatch loads into OpenLiteSpeed and applies those directives per request, the way Apache does. Edits take effect on the next request; no restart.
@@ -65,11 +67,25 @@ and does a graceful restart. If OpenLiteSpeed does not come back with hatch load
 ```sh
 sudo bash install.sh --file ./libhatch.so   # install a local build
 sudo bash install.sh --version v0.1.0       # pin a release
+sudo bash install.sh --no-guard             # skip the Webuzo config guard
 sudo bash install.sh --status
 sudo bash install.sh --uninstall
 ```
 
 CyberPanel ships its own OpenLiteSpeed core. hatch recognises it by the `cyberpanel_lsi_api_abi_v1` symbol the core exports and reads the table with that layout. On a core with an unknown marker it logs one line and stays idle instead of guessing. The bundled `cyberpanel_ols` module needs a paid license and stays inert without one; hatch runs next to it.
+
+## Webuzo
+
+Webuzo 4.x runs a stock OpenLiteSpeed core, so hatch loads on it unchanged: there is no ABI marker to read and no special build. Its vhosts use `configFile` and `autoLoadHtaccess 1`, with document roots under `/home/<user>/<domain>/public`. hatch asks the server for the document root, so the `.htaccess` beside the site is found either way.
+
+What differs is who owns the config. Webuzo writes `httpd_config.conf` and every vhost under `conf/webuzo_vh/` from its own state — on a certificate renewal, a domain or account change, and sometimes from its own service check — so a `module hatch` block added by hand can disappear. When the installer sees Webuzo (`/usr/local/webuzo` or `conf/webuzo_vh/`), it also installs `/usr/local/bin/hatch-guard` with a one-minute entry in `/etc/cron.d/hatch-guard`. The guard puts the block back and restarts OpenLiteSpeed only when Webuzo has removed it; a config that still has the block is left alone.
+
+```sh
+sudo bash install.sh --no-guard   # skip the guard
+sudo bash install.sh --status     # shows whether Webuzo and the guard are present
+```
+
+`php_value` and `php_flag` are logged and skipped on Webuzo's stock core, the same as on any OpenLiteSpeed build without CyberPanel's API.
 
 ## Docker
 

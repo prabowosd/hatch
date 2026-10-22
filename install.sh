@@ -4,6 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/prabowosd/hatch/main/install.sh | sudo bash
 #   sudo bash install.sh --file ./hatch.so     install a local build
 #   sudo bash install.sh --version v0.1.0      pin a release
+#   sudo bash install.sh --no-guard            skip the Webuzo config guard
 #   sudo bash install.sh --status | --uninstall
 #
 # Every change is backed up first; if OpenLiteSpeed does not come back with the
@@ -14,10 +15,14 @@ REPO="prabowosd/hatch"
 LSWS="${LSWS_HOME:-/usr/local/lsws}"
 CONF="$LSWS/conf/httpd_config.conf"
 MODULE="$LSWS/modules/hatch.so"
+GUARD="/usr/local/bin/hatch-guard"
+GUARD_CRON="/etc/cron.d/hatch-guard"
+WEBUZO_HOME="${WEBUZO_HOME:-/usr/local/webuzo}"
 BACKUP_DIR="/var/lib/hatch/install-backups/$(date +%Y%m%d-%H%M%S)"
 VERSION="latest"
 FILE=""
 ACTION="install"
+NO_GUARD=0
 
 say() { printf '\033[1m[hatch]\033[0m %s\n' "$*"; }
 die() { printf '\033[31m[hatch] %s\033[0m\n' "$*" >&2; exit 1; }
@@ -26,9 +31,10 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --file) FILE="${2:?--file needs a path}"; shift 2 ;;
     --version) VERSION="${2:?--version needs a tag}"; shift 2 ;;
+    --no-guard) NO_GUARD=1; shift ;;
     --uninstall) ACTION="uninstall"; shift ;;
     --status) ACTION="status"; shift ;;
-    -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
 done
@@ -38,6 +44,45 @@ done
 [ -f "$CONF" ] || die "missing $CONF"
 
 has_block() { grep -qE '^module[[:space:]]+hatch[[:space:]]*\{' "$CONF"; }
+
+is_webuzo() { [ -d "$LSWS/conf/webuzo_vh" ] || [ -f "$WEBUZO_HOME/globals.php" ]; }
+
+install_guard() {
+  # Webuzo writes httpd_config.conf from its own state, so a block added by hand
+  # disappears on its next rewrite. This cron job puts the block back and restarts.
+  cat > "$GUARD" <<'GUARD_SCRIPT'
+#!/bin/sh
+# hatch-guard: restore hatch's module block when Webuzo rewrites httpd_config.conf.
+set -eu
+# HATCH_GUARD_BEGIN
+LSWS="${LSWS_HOME:-/usr/local/lsws}"
+CONF="$LSWS/conf/httpd_config.conf"
+MODULE="$LSWS/modules/hatch.so"
+[ -f "$CONF" ] && [ -f "$MODULE" ] || exit 0
+has_block() { grep -qE '^module[[:space:]]+hatch[[:space:]]*\{' "$CONF"; }
+has_block && exit 0
+if command -v flock >/dev/null 2>&1; then
+  LOCK_DIR=""
+  if [ -d /run ]; then LOCK_DIR=/run; elif [ -d /var/lock ]; then LOCK_DIR=/var/lock; fi
+  if [ -n "$LOCK_DIR" ]; then
+    exec 9>>"$LOCK_DIR/hatch-guard.lock"
+    flock -n 9 || exit 0
+  fi
+  has_block && exit 0
+fi
+cp -p "$CONF" "$CONF.hatch-guard" 2>/dev/null || true
+printf '\nmodule hatch {\n  ls_enabled              1\n}\n' >> "$CONF"
+logger -t hatch "restored the module block in $CONF (Webuzo rewrote it); restarting OpenLiteSpeed" 2>/dev/null || true
+"$LSWS/bin/lswsctrl" restart >/dev/null 2>&1 || true
+# HATCH_GUARD_END
+GUARD_SCRIPT
+  chmod 0755 "$GUARD"
+  printf '# hatch-guard: restore the module block when Webuzo rewrites httpd_config.conf\n* * * * * root %s\n' "$GUARD" > "$GUARD_CRON"
+  chmod 0644 "$GUARD_CRON"
+  say "Webuzo detected: hatch-guard installed, checks the config every minute"
+}
+
+remove_guard() { rm -f "$GUARD_CRON" "$GUARD"; }
 
 loaded_since() {
   # True when the error log shows hatch initialised after the given timestamp.
@@ -60,6 +105,13 @@ do_status() {
   if grep -qE '^module[[:space:]]+cyberpanel_ols' "$CONF"; then
     say "note: CyberPanel's OpenLiteSpeed core detected; hatch reads its LSIAPI layout"
   fi
+  if is_webuzo; then
+    if [ -x "$GUARD" ] && [ -f "$GUARD_CRON" ]; then
+      say "Webuzo: detected; hatch-guard restores the block when Webuzo rewrites the config"
+    else
+      say "Webuzo: detected; no guard installed (run the installer to add it)"
+    fi
+  fi
 }
 
 do_uninstall() {
@@ -69,6 +121,7 @@ do_uninstall() {
     awk 'BEGIN{skip=0} /^module[[:space:]]+hatch[[:space:]]*\{/{skip=1} skip&&/^\}/{skip=0;next} !skip' "$BACKUP_DIR/httpd_config.conf" > "$CONF"
   fi
   [ -f "$MODULE" ] && mv "$MODULE" "$BACKUP_DIR/hatch.so"
+  remove_guard
   restart || die "OpenLiteSpeed did not restart; config backup in $BACKUP_DIR"
   say "uninstalled; backup in $BACKUP_DIR"
 }
@@ -118,6 +171,9 @@ do_install() {
     else
       say "installed: $(printf '%s' "$line" | grep -oE 'module v[0-9.]+.*')"
       say ".htaccess Header, Redirect, Require/Allow/Deny, Files and Expires directives are now applied"
+      if is_webuzo; then
+        if [ "$NO_GUARD" = 1 ]; then say "Webuzo detected; guard skipped (--no-guard)"; else install_guard; fi
+      fi
       return 0
     fi
   else
