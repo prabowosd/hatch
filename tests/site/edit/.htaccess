@@ -1,0 +1,4 @@
+Header set X-Hatch-Edit "abc123"
+Header edit X-Hatch-Edit ^abc XYZ
+Header set X-Hatch-Edit-All "a1b2"
+Header edit* X-Hatch-Edit-All [0-9] N
