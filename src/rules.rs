@@ -15,13 +15,18 @@ pub enum HeaderAction {
     Merge,
     Add,
     Unset,
+    /// `Header edit`: substitute a pattern in the value the server already set.
+    Edit,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct HeaderOp {
     pub action: HeaderAction,
     pub name: String,
+    /// The header value, or for `edit` the replacement string.
     pub value: String,
+    /// `Header edit`: the pattern to substitute in the existing value, and whether every match is replaced.
+    pub edit: Option<(Regex, bool)>,
     /// `env=name` or `env=!name`; the header applies only when the variable matches.
     pub env: Option<(String, bool)>,
 }
@@ -164,16 +169,12 @@ fn value_ok(value: &str) -> bool {
 }
 
 fn target_ok(target: &str) -> bool {
-    value_ok(target)
-        && !target.contains(char::is_whitespace)
-        && (target.starts_with('/') || target.starts_with("http://") || target.starts_with("https://"))
+    value_ok(target) && !target.contains(char::is_whitespace) && (target.starts_with('/') || target.starts_with("http://") || target.starts_with("https://"))
 }
 
 /// Environment variable names reach the server, so keep them to a plain identifier.
 fn env_name_ok(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 128
-        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.')
+    !name.is_empty() && name.len() <= 128 && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.')
 }
 
 fn php_name_ok(name: &str) -> bool {
@@ -216,9 +217,7 @@ fn net_contains(net: &Net, ip: &IpAddr) -> bool {
             let mask = if *bits == 0 { 0 } else { u128::MAX << (128 - *bits as u32) };
             (u128::from(*n) & mask) == (u128::from(*a) & mask)
         }
-        (Net::Cidr(IpAddr::V4(n), bits), IpAddr::V6(a)) => {
-            a.to_ipv4_mapped().is_some_and(|v4| net_contains(&Net::Cidr(IpAddr::V4(*n), *bits), &IpAddr::V4(v4)))
-        }
+        (Net::Cidr(IpAddr::V4(n), bits), IpAddr::V6(a)) => a.to_ipv4_mapped().is_some_and(|v4| net_contains(&Net::Cidr(IpAddr::V4(*n), *bits), &IpAddr::V4(v4))),
         _ => false,
     }
 }
@@ -236,7 +235,7 @@ fn expiry(text: &str) -> Option<u64> {
         return None;
     }
     let rest: Vec<&str> = words.collect();
-    if rest.is_empty() || rest.len() % 2 != 0 {
+    if rest.is_empty() || !rest.len().is_multiple_of(2) {
         return None;
     }
     let mut total: u64 = 0;
@@ -409,7 +408,7 @@ impl Compiler {
                 };
                 self.rules.sections[s].env.unset.push(name.clone());
             }
-            "setenvif" | "setenvifnocase" | "browsermatch" => self.env_test(name, args, line, s),
+            "setenvif" | "setenvifnocase" | "browsermatch" | "browsermatchnocase" => self.env_test(name, args, line, s),
             // The LSIAPI table can read a request header but has no call to change one.
             "requestheader" => self.note(line, "RequestHeader is not available in LSIAPI, ignored"),
             "php_value" | "php_admin_value" => {
@@ -475,10 +474,16 @@ impl Compiler {
             "merge" => HeaderAction::Merge,
             "add" => HeaderAction::Add,
             "unset" => HeaderAction::Unset,
+            // `edit` replaces in the existing value, so it takes a pattern before the replacement.
+            "edit" | "edit*" => HeaderAction::Edit,
             other => return self.note(line, format!("Header action {other:?} is not supported")),
         };
-        let value = args.get(2).cloned().unwrap_or_default();
-        let extra = if action == HeaderAction::Unset { 2 } else { 3 };
+        let value = args.get(if action == HeaderAction::Edit { 3 } else { 2 }).cloned().unwrap_or_default();
+        let extra = match action {
+            HeaderAction::Unset => 2,
+            HeaderAction::Edit => 4,
+            _ => 3,
+        };
         let mut env = None;
         for condition in args.iter().skip(extra) {
             // Only the keyword is case-insensitive; the variable name is matched as written.
@@ -498,31 +503,46 @@ impl Compiler {
                 return self.note(line, format!("Header condition {condition:?} is not supported"));
             }
         }
-        if !header_name_ok(name) || !value_ok(&value) || (action != HeaderAction::Unset && value.is_empty()) {
-            return self.note(line, "Header has an invalid name or value, ignored");
+        if !header_name_ok(name) {
+            return self.note(line, "Header has an invalid name, ignored");
         }
-        self.rules.sections[s].headers.push(HeaderOp { action, name: name.clone(), value, env });
+        let edit = if action == HeaderAction::Edit {
+            let (Some(pattern), Some(_)) = (args.get(2), args.get(3)) else {
+                return self.note(line, "Header edit needs a pattern and a replacement");
+            };
+            let Some(compiled) = regex(pattern, false) else {
+                return self.note(line, format!("Header edit pattern {pattern:?} is not supported"));
+            };
+            if !value_ok(pattern) || !value_ok(&value) {
+                return self.note(line, "Header edit has an unusable pattern or replacement, ignored");
+            }
+            Some((compiled, args[0].ends_with('*')))
+        } else {
+            if !value_ok(&value) || (action != HeaderAction::Unset && value.is_empty()) {
+                return self.note(line, "Header has an invalid value, ignored");
+            }
+            None
+        };
+        self.rules.sections[s].headers.push(HeaderOp { action, name: name.clone(), value, edit, env });
     }
 
     /// `SetEnvIf attribute pattern [env[=value]]`, `BrowserMatch pattern env`.
     fn env_test(&mut self, name: &str, args: &[String], line: usize, s: usize) {
         let (attribute, pattern, rest) = match name {
-            "browsermatch" => ("User-Agent", args.first(), args.get(1..).unwrap_or_default()),
+            "browsermatch" | "browsermatchnocase" => ("User-Agent", args.first(), args.get(1..).unwrap_or_default()),
             _ => (args.first().map(String::as_str).unwrap_or(""), args.get(1), args.get(2..).unwrap_or_default()),
         };
         let Some(pattern) = pattern.filter(|p| !p.is_empty()) else {
             return self.note(line, format!("{name} needs an attribute and a pattern"));
         };
-        let Some(compiled) = regex(pattern, name == "setenvifnocase") else {
+        let Some(compiled) = regex(pattern, matches!(name, "setenvifnocase" | "browsermatchnocase")) else {
             return self.note(line, format!("{name} pattern {pattern:?} is not supported"));
         };
         let attribute = attribute.to_ascii_lowercase();
         // `http_` names a request header; store the bare header name so the lookup matches.
         let stored = attribute.strip_prefix("http_").unwrap_or(&attribute).to_string();
-        if !matches!(stored.as_str(), "request_uri" | "request_method" | "remote_host" | "remote_addr" | "user-agent" | "referer" | "host") {
-            if !header_name_ok(&stored) {
-                return self.note(line, format!("{name} attribute {attribute:?} is not supported"));
-            }
+        if !matches!(stored.as_str(), "request_uri" | "request_method" | "remote_host" | "remote_addr" | "user-agent" | "referer" | "host") && !header_name_ok(&stored) {
+            return self.note(line, format!("{name} attribute {attribute:?} is not supported"));
         }
         let attribute = stored;
         let mut added = false;
@@ -535,13 +555,7 @@ impl Compiler {
                 self.note(line, format!("{name} variable {spec:?} is not usable"));
                 continue;
             }
-            self.rules.sections[s].env.tests.push(EnvTest {
-                attribute: attribute.clone(),
-                pattern: compiled.clone(),
-                negate,
-                set,
-                value,
-            });
+            self.rules.sections[s].env.tests.push(EnvTest { attribute: attribute.clone(), pattern: compiled.clone(), negate, set, value });
             added = true;
         }
         if !added && rest.is_empty() {
@@ -606,7 +620,11 @@ impl Compiler {
                     return self.note(line, "Require ip has a value that is not an IP or subnet, ignored");
                 }
                 let access = &mut self.rules.sections[s].access;
-                if negated { access.require_not_ip.extend(nets) } else { access.require_ip.extend(nets) }
+                if negated {
+                    access.require_not_ip.extend(nets)
+                } else {
+                    access.require_ip.extend(nets)
+                }
             }
             _ => self.note(line, "this Require form is not supported yet, ignored"),
         }
@@ -728,6 +746,32 @@ impl Access {
     }
 }
 
+impl HeaderOp {
+    /// For `Header edit`: the value with the pattern applied, or None when nothing matches.
+    pub fn apply_edit(&self, current: &str) -> Option<String> {
+        let (pattern, all) = self.edit.as_ref()?;
+        if *all {
+            if !pattern.is_match(current) {
+                return None;
+            }
+            let mut out = String::new();
+            let mut last = 0;
+            for caps in pattern.captures_iter(current) {
+                let m = caps.get(0).expect("a capture always carries the whole match");
+                out.push_str(&current[last..m.start()]);
+                out.push_str(&substitute(&self.value, &caps));
+                last = m.end();
+            }
+            out.push_str(&current[last..]);
+            Some(out)
+        } else {
+            let caps = pattern.captures(current)?;
+            let m = caps.get(0).expect("a capture always carries the whole match");
+            Some(format!("{}{}{}", &current[..m.start()], substitute(&self.value, &caps), &current[m.end()..]))
+        }
+    }
+}
+
 fn substitute(target: &str, caps: &regex::Captures) -> String {
     let mut out = String::with_capacity(target.len());
     let mut chars = target.chars().peekable();
@@ -774,9 +818,7 @@ pub fn decide(chain: &[&Rules], req: &Request) -> Decision {
     'redirects: for rules in chain.iter().rev() {
         for r in &rules.redirects {
             if let Some(caps) = r.pattern.captures(req.uri) {
-                let target = r.target.as_ref().map(|t| {
-                    if r.keeps_tail { format!("{t}{}", caps.get(1).map_or("", |m| m.as_str())) } else { substitute(t, &caps) }
-                });
+                let target = r.target.as_ref().map(|t| if r.keeps_tail { format!("{t}{}", caps.get(1).map_or("", |m| m.as_str())) } else { substitute(t, &caps) });
                 decision.redirect = Some((r.status, target));
                 break 'redirects;
             }
@@ -814,7 +856,11 @@ pub fn decide(chain: &[&Rules], req: &Request) -> Decision {
                 None => true,
                 Some((except, methods)) => {
                     let listed = methods.iter().any(|m| m.eq_ignore_ascii_case(req.method));
-                    if *except { !listed } else { listed }
+                    if *except {
+                        !listed
+                    } else {
+                        listed
+                    }
                 }
             };
             if method_matches && section.access.is_set() {
@@ -873,11 +919,7 @@ impl Expires {
             return None;
         }
         let mime = content_type.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
-        self.by_type
-            .iter()
-            .find(|(m, _)| *m == mime || (m.ends_with("/*") && mime.starts_with(&m[..m.len() - 1])))
-            .map(|(_, s)| *s)
-            .or(self.default)
+        self.by_type.iter().find(|(m, _)| *m == mime || (m.ends_with("/*") && mime.starts_with(&m[..m.len() - 1]))).map(|(_, s)| *s).or(self.default)
     }
 }
 
@@ -926,10 +968,30 @@ mod tests {
 
     #[test]
     fn unsafe_headers_and_conditions_are_skipped() {
-        let r = rules("Header set Bad\\ Name x\nHeader edit X-B a b\nHeader set X-Ok \"1\"\n");
+        let r = rules("Header set Bad\\ Name x\nHeader echo X-B a b\nHeader set X-Ok \"1\"\n");
         let d = decide(&[&r], &plain("/", "", None));
         assert_eq!(d.headers.len(), 1);
         assert_eq!(r.notes.len(), 2);
+    }
+
+    #[test]
+    fn header_edit_substitutes_in_the_existing_value() {
+        let r = rules("Header edit X-V ^abc XYZ\nHeader edit* X-V [0-9] #\n");
+        assert!(r.notes.is_empty(), "{:?}", r.notes);
+        let d = decide(&[&r], &plain("/", "", None));
+        let edits: Vec<&HeaderOp> = d.headers.iter().filter(|h| h.action == HeaderAction::Edit).collect();
+        assert_eq!(edits.len(), 2);
+        // `edit` replaces the first match, `edit*` replaces every match, and a miss leaves the value alone.
+        assert_eq!(edits[0].apply_edit("abc123"), Some("XYZ123".into()));
+        assert_eq!(edits[0].apply_edit("zzz"), None);
+        assert_eq!(edits[1].apply_edit("a1b2"), Some("a#b#".into()));
+        assert_eq!(edits[1].apply_edit("abc"), None);
+    }
+
+    #[test]
+    fn header_edit_needs_a_pattern_and_a_replacement() {
+        assert_eq!(rules("Header edit X-V abc\n").notes.len(), 1);
+        assert_eq!(rules("Header edit X-V ( abc\n").notes.len(), 1);
     }
 
     #[test]
@@ -1062,12 +1124,30 @@ mod tests {
     }
 
     #[test]
+    fn browsermatchnocase_ignores_case() {
+        let r = rules("BrowserMatchNoCase \"^curl/\" CLI\n");
+        assert!(r.notes.is_empty(), "{:?}", r.notes);
+        let hit = {
+            let h = one_header("User-Agent", "cURL/8.5");
+            decide(&[&r], &with_header("/", None, &h))
+        };
+        assert!(hit.env.iter().any(|(n, _)| n == "CLI"));
+        let miss = {
+            let h = one_header("User-Agent", "Mozilla/5.0");
+            decide(&[&r], &with_header("/", None, &h))
+        };
+        assert!(miss.env.is_empty());
+    }
+
+    #[test]
     fn negated_setenvif_sets_only_when_the_pattern_misses() {
         let r = rules("SetEnvIf User-Agent \"bot\" !HUMAN\n");
         assert!({
             let h = one_header("User-Agent", "bot");
             decide(&[&r], &with_header("/", None, &h))
-        }.env.is_empty());
+        }
+        .env
+        .is_empty());
         let human = {
             let h = one_header("User-Agent", "Mozilla");
             decide(&[&r], &with_header("/", None, &h))

@@ -106,6 +106,9 @@ check "ErrorDocument keeps the 404 status" '404'                           "$(co
 check "ErrorDocument covers a denial"      'custom forbidden'              "$(curl -s "$B/errdoc403/secret.txt")"
 check "denial keeps the 403 status"        '403'                          "$(code /errdoc403/secret.txt)"
 
+check "Header edit rewrites a value"       'x-hatch-edit: xyz123'          "$(headers /edit/)"
+check "Header edit* replaces every match"  'x-hatch-edit-all: anbn'        "$(headers /edit/)"
+
 # A stripped backslash turns ^\. into ^. and denies every file in the folder.
 check "FilesMatch ^\\. keeps a normal file" '200'                          "$(code /dotguard/)"
 check "FilesMatch ^\\. blocks a dotfile"   '403'                          "$(code /dotguard/.secret)"
@@ -144,6 +147,14 @@ if [ "$(curl -s "$B/hx/plain.php")" = plain ]; then
   check "PHP without one gets the expiry" 'cache-control: max-age=2592000'   "$(headers /hx/plain.php)"
 else
   echo "  skip  PHP checks (no PHP handler on this server)"
+fi
+
+# ErrorDocument for a status only the backend raises needs a handler that can fail.
+if [ "$(curl -s "$B/hx/plain.php")" = plain ]; then
+  check "ErrorDocument serves a backend 500" 'custom 500'                    "$(curl -s "$B/errdoc500/boom.php")"
+  check "ErrorDocument keeps the 500 status" '500'                          "$(code /errdoc500/boom.php)"
+else
+  echo "  skip  ErrorDocument 500 checks (no PHP handler on this server)"
 fi
 
 "$ENGINE" exec "$NAME" bash -c 'sed -i "s/X-Hatch-Hx \"yes\"/X-Hatch-Hx \"changed\"/" /usr/local/lsws/Example/html/hx/.htaccess'

@@ -31,6 +31,11 @@ jobs:
           dnf -y install gcc clang-devel git
           curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" component add clippy rustfmt
+      - name: Lint
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets --locked -- -D warnings
       - name: Unit tests
         run: cargo test --locked
       - name: Installer guard tests

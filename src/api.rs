@@ -115,7 +115,7 @@ unsafe fn entry<F>(table: *const usize, index: usize, shift: usize, name: &'stat
 /// The table for this process, resolved once per worker.
 pub fn get() -> Result<&'static Api, Unsupported> {
     static API: OnceLock<Result<Api, Unsupported>> = OnceLock::new();
-    API.get_or_init(detect).as_ref().map_err(|e| e.clone())
+    API.get_or_init(detect).as_ref().map_err(|e| *e)
 }
 
 fn detect() -> Result<Api, Unsupported> {

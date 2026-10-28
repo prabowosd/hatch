@@ -23,11 +23,11 @@ OpenLiteSpeed reads `RewriteRule` from `.htaccess` on its own, but ignores every
 
 | Directive | Notes |
 |---|---|
-| `Header set\|append\|merge\|add\|unset` | `always` and `onsuccess` accepted. `set` replaces values the server added itself. `env=name` and `env=!name` conditions apply; `expr=` is reported and ignored. |
+| `Header set\|append\|merge\|add\|edit\|unset` | `always` and `onsuccess` accepted. `set` replaces values the server added itself; `edit` substitutes a pattern in the value already set, and `edit*` replaces every match. `env=name` and `env=!name` conditions apply; `expr=` is reported and ignored. |
 | `SetEnv`, `UnsetEnv` | Sets and clears request environment variables, so the backend and the rewrite engine see them. |
-| `SetEnvIf`, `SetEnvIfNoCase`, `BrowserMatch` | Matches a request header, `Request_URI`, `Request_Method`, `Remote_Addr`, `Remote_Host` or `Host`. `!var` and `var=value` are accepted. |
+| `SetEnvIf`, `SetEnvIfNoCase`, `BrowserMatch`, `BrowserMatchNoCase` | Matches a request header, `Request_URI`, `Request_Method`, `Remote_Addr`, `Remote_Host` or `Host`. `!var` and `var=value` are accepted. |
 | `php_value`, `php_admin_value`, `php_flag`, `php_admin_flag` | Needs CyberPanel's OpenLiteSpeed core, whose API carries the php config calls. On other cores the line is logged once and skipped. |
-| `ErrorDocument` | A path target, for 404 and for a denied request. The page is served through an internal redirect and keeps the original status. URL and text targets need a body hatch cannot write, so they are logged and skipped. |
+| `ErrorDocument` | A path target, for a 404 and for a denied request, and for any other 4xx or 5xx the backend returns (`401`, `500`, `503`). The page is served through an internal redirect and keeps the original status. URL and text targets need a body hatch cannot write, so they are logged and skipped. |
 | `Options -Indexes` | A directory with no index file answers 403 instead of listing its contents. `+Indexes` restores the server default. Symlink and content-negotiation options (`FollowSymLinks`, `SymLinksIfOwnerMatch`, `MultiViews`) are accepted and left to the server. |
 | `<Limit>`, `<LimitExcept>` | Access rules apply only to the listed HTTP methods (or to every method except them). |
 | `Satisfy Any\|All` | Combines host rules (`Order`/`Allow`/`Deny`) with `Require` rules using OR (`Any`) or AND (`All`). |

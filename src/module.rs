@@ -6,7 +6,7 @@
 use crate::api::{self, Api};
 use crate::ffi::*;
 use crate::parse::parse;
-use crate::rules::{decide, Decision, HeaderAction, Request, Rules};
+use crate::rules::{decide, Decision, HeaderAction, HeaderOp, Request, Rules};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int};
@@ -82,7 +82,7 @@ fn read(f: unsafe extern "C" fn(*const lsi_session_t, *mut c_int) -> *const c_ch
     if ptr.is_null() || len <= 0 {
         return None;
     }
-    let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, len as usize) };
+    let bytes = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), len as usize) };
     std::str::from_utf8(bytes).ok().map(str::to_owned)
 }
 
@@ -135,8 +135,7 @@ fn evaluate(s: *const lsi_session_t) -> Option<Decision> {
     let uri = read(api.get_req_uri, s);
     let root = doc_root(api, s);
     // get_uri_file_path returns nonzero when it cannot map the URI, so fall back to the docroot.
-    let path = uri.as_deref().and_then(|u| file_path(api, s, u)).filter(|p| !p.as_os_str().is_empty())
-        .or_else(|| Some(map_uri(root.as_deref()?, uri.as_deref()?)?));
+    let path = uri.as_deref().and_then(|u| file_path(api, s, u)).filter(|p| !p.as_os_str().is_empty()).or_else(|| map_uri(root.as_deref()?, uri.as_deref()?));
     // If the server's path is not inside the docroot, fall back to the docroot mapping.
     let path = match (&root, &path, uri.as_deref()) {
         (Some(r), Some(p), Some(u)) if p.strip_prefix(r).is_err() => map_uri(r, u)?,
@@ -147,11 +146,7 @@ fn evaluate(s: *const lsi_session_t) -> Option<Decision> {
     let (uri, root, path) = (uri?, root?, path);
     let rel = path.strip_prefix(&root).ok()?;
     let is_dir = uri.ends_with('/') || path.is_dir();
-    let (folders, file_name) = if is_dir {
-        (rel.to_path_buf(), String::new())
-    } else {
-        (rel.parent().map(Path::to_path_buf).unwrap_or_default(), rel.file_name()?.to_string_lossy().into_owned())
-    };
+    let (folders, file_name) = if is_dir { (rel.to_path_buf(), String::new()) } else { (rel.parent().map(Path::to_path_buf).unwrap_or_default(), rel.file_name()?.to_string_lossy().into_owned()) };
 
     let mut chain: Vec<Rc<Rules>> = Vec::new();
     let mut dir = root.clone();
@@ -184,7 +179,7 @@ fn req_header(api: &Api, s: *const lsi_session_t, name: &str) -> Option<String> 
     if ptr.is_null() || len <= 0 {
         return None;
     }
-    let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, len as usize) };
+    let bytes = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), len as usize) };
     std::str::from_utf8(bytes).ok().map(str::to_owned)
 }
 
@@ -249,8 +244,7 @@ fn deny_directory_listing(api: &Api, s: *const lsi_session_t) -> Option<c_int> {
         return None;
     }
     let root = doc_root(api, s)?;
-    let dir = file_path(api, s, &uri).filter(|p| !p.as_os_str().is_empty())
-        .or_else(|| map_uri(&root, &uri))?;
+    let dir = file_path(api, s, &uri).filter(|p| !p.as_os_str().is_empty()).or_else(|| map_uri(&root, &uri))?;
     const INDEX_FILES: [&str; 3] = ["index.html", "index.php", "index.htm"];
     let has_index = INDEX_FILES.iter().any(|name| dir.join(name).is_file());
     (!has_index && dir.is_dir()).then_some(403)
@@ -309,6 +303,35 @@ fn set_header(api: &Api, s: *const lsi_session_t, name: &str, value: &str, op: u
     }
 }
 
+/// `Header edit`: substitute the pattern in the header's current value, leaving it alone on a miss.
+fn edit_header(api: &Api, s: *const lsi_session_t, h: &HeaderOp) {
+    // A response header can repeat (Set-Cookie), so read every line and write them all back.
+    let mut iov: [iovec; 8] = std::array::from_fn(|_| iovec { iov_base: std::ptr::null_mut(), iov_len: 0 });
+    let n = unsafe { (api.get_resp_header)(s, LSI_RESP_HEADER_ID_LSI_RSPHDR_UNKNOWN, h.name.as_ptr() as *const c_char, h.name.len() as c_int, iov.as_mut_ptr(), iov.len() as c_int) };
+    if n < 1 {
+        return;
+    }
+    let mut values: Vec<String> = Vec::with_capacity(n as usize);
+    for iov in iov.iter().take(n as usize) {
+        if iov.iov_base.is_null() {
+            continue;
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(iov.iov_base as *const u8, iov.iov_len) };
+        let current = String::from_utf8_lossy(bytes);
+        match h.apply_edit(&current) {
+            Some(edited) => values.push(edited),
+            None => values.push(current.into_owned()),
+        }
+    }
+    if values.is_empty() {
+        return;
+    }
+    remove_header(api, s, &h.name);
+    for value in &values {
+        set_header(api, s, &h.name, value, LSI_HEADER_OP_LSI_HEADEROP_ADD);
+    }
+}
+
 /// SetEnv, SetEnvIf and UnsetEnv, so the backend and rewrite rules see the same environment.
 fn apply_env(api: &Api, s: *const lsi_session_t, d: &Decision) {
     for (name, value) in &d.env {
@@ -353,8 +376,7 @@ fn apply_errordocument(api: &Api, s: *const lsi_session_t, d: &Decision) -> bool
     }
     let Some(uri) = read(api.get_req_uri, s) else { return false };
     let Some(root) = doc_root(api, s) else { return false };
-    let path = file_path(api, s, &uri).filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| map_uri(&root, &uri).unwrap_or_else(|| root.clone()));
+    let path = file_path(api, s, &uri).filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| map_uri(&root, &uri).unwrap_or_else(|| root.clone()));
     let code = if d.denied {
         403
     } else if !path.exists() && !uri.ends_with('/') {
@@ -374,10 +396,35 @@ fn apply_errordocument(api: &Api, s: *const lsi_session_t, d: &Decision) -> bool
     true
 }
 
+/// ErrorDocument for a status only the backend knows (401, 500, 503...). Returns true when it redirects.
+fn apply_status_errordocument(api: &Api, s: *const lsi_session_t, d: &Decision) -> bool {
+    let code = unsafe { (api.get_status_code)(s) };
+    // 403 and 404 already have their ErrorDocument served at URI_MAP.
+    if !(400..600).contains(&code) || code == 403 || code == 404 {
+        return false;
+    }
+    let Some(uri) = read(api.get_req_uri, s) else { return false };
+    let Some(doc) = d.errordocs.iter().find(|doc| doc.code as c_int == code) else { return false };
+    // The target runs through this hook again; redirecting it to itself would loop.
+    if doc.target == uri {
+        return false;
+    }
+    unsafe {
+        (api.set_status_code)(s, code);
+        (api.set_uri_qs)(s, LSI_URL_OP_LSI_URL_REDIRECT_INTERNAL as c_int, doc.target.as_ptr() as *const c_char, doc.target.len() as c_int, std::ptr::null(), 0);
+    }
+    true
+}
+
 unsafe extern "C" fn on_send_resp_header(param: *mut lsi_param_t) -> c_int {
     guard(|| {
         let s = unsafe { (*param).session };
         let (Some(api), Some(d)) = (api(), evaluate(s)) else { return LSI_RETCODE_LSI_OK as c_int };
+        // ErrorDocument for a status only the backend knows (401, 500, 503...); 403 and 404 are
+        // served at URI_MAP, where the file path is known.
+        if apply_status_errordocument(api, s, &d) {
+            return LSI_RETCODE_LSI_OK as c_int;
+        }
         // mod_expires runs before mod_headers, so an explicit Header set Cache-Control wins.
         if let Some(secs) = d.expires.seconds_for(&content_type(api, s)).filter(|_| !app_set_cache(api, s)) {
             remove_header(api, s, "Cache-Control");
@@ -405,6 +452,7 @@ unsafe extern "C" fn on_send_resp_header(param: *mut lsi_param_t) -> c_int {
                 HeaderAction::Append => set_header(api, s, &h.name, &h.value, LSI_HEADER_OP_LSI_HEADEROP_APPEND),
                 HeaderAction::Merge => set_header(api, s, &h.name, &h.value, LSI_HEADER_OP_LSI_HEADEROP_MERGE),
                 HeaderAction::Add => set_header(api, s, &h.name, &h.value, LSI_HEADER_OP_LSI_HEADEROP_ADD),
+                HeaderAction::Edit => edit_header(api, s, h),
             }
         }
         LSI_RETCODE_LSI_OK as c_int
@@ -413,11 +461,7 @@ unsafe extern "C" fn on_send_resp_header(param: *mut lsi_param_t) -> c_int {
 
 unsafe extern "C" fn init(_module: *mut lsi_module_t) -> c_int {
     match api::get() {
-        Ok(_) => log(
-            std::ptr::null(),
-            LSI_LOG_LEVEL_LSI_LOG_INFO,
-            &format!("module v{} loaded, {} LSIAPI layout", env!("CARGO_PKG_VERSION"), api::layout_name()),
-        ),
+        Ok(_) => log(std::ptr::null(), LSI_LOG_LEVEL_LSI_LOG_INFO, &format!("module v{} loaded, {} LSIAPI layout", env!("CARGO_PKG_VERSION"), api::layout_name())),
         Err(e) => log(std::ptr::null(), LSI_LOG_LEVEL_LSI_LOG_WARN, &format!("module v{} idle: {}", env!("CARGO_PKG_VERSION"), e.describe())),
     }
     LSI_RETCODE_LSI_OK as c_int
