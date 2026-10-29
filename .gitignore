@@ -2,3 +2,4 @@ target/
 target-x86_64/
 *.core
 core
+.commandcode/
