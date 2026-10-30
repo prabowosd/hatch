@@ -158,6 +158,14 @@ tail -f /usr/local/lsws/logs/error.log | grep '\[hatch\]'
 
 The check runs once per worker thread, so the restart is required after creating or removing the file. Entries are written at WARN level to the vhost error log, so an `errorlog` block with `logLevel ERROR` will suppress them. Remove the file and restart when done, since an active trace writes several lines per request.
 
+## Sponsors
+
+<p align="center">
+  <a href="https://kenari.id"><img src="assets/kenari.svg" alt="Kenari" width="200"></a>
+</p>
+
+[Kenari](https://kenari.id) sponsors hatch through its [grant program](https://grant.kenari.id) for two months, until December 2026.
+
 ## License
 
 GPL-3.0-or-later, the same as OpenLiteSpeed. hatch is an independent project and is not affiliated with LiteSpeed Technologies or CyberPanel.
