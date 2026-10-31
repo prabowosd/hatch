@@ -101,6 +101,9 @@ check "negated env= applies when unset"  'x-hatch-negated: on'              "$(h
 check "env= drops when its variable is set" '' "$(curl -s -D - -o /dev/null -H 'X-Hatch-Test: yes' "$B/env/" | tr -d '\r' | tr 'A-Z' 'a-z' | grep -c 'x-hatch-negated' | sed 's/^0$//;s/^1$/unexpected header/')"
 
 check "Options -Indexes denies a listing" '403'                            "$(code /noindex/)"
+check "DirectoryIndex picks the listed file" 'custom index'                "$(curl -s "$B/idx/")"
+check "DirectoryIndex keeps a standard index" 'plain index'                "$(curl -s "$B/idx2/")"
+check "DirectoryIndex disabled denies the folder" '403'                     "$(code /idx3/)"
 check "ErrorDocument serves the custom page" 'custom not found'            "$(curl -s "$B/errdoc/missing")"
 check "ErrorDocument keeps the 404 status" '404'                           "$(code /errdoc/missing)"
 check "ErrorDocument covers a denial"      'custom forbidden'              "$(curl -s "$B/errdoc403/secret.txt")"

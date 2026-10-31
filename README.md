@@ -29,6 +29,7 @@ OpenLiteSpeed reads `RewriteRule` from `.htaccess` on its own, but ignores every
 | `php_value`, `php_admin_value`, `php_flag`, `php_admin_flag` | Needs CyberPanel's OpenLiteSpeed core, whose API carries the php config calls. On other cores the line is logged once and skipped. |
 | `ErrorDocument` | A path target, for a 404 and for a denied request, and for any other 4xx or 5xx the backend returns (`401`, `500`, `503`). The page is served through an internal redirect and keeps the original status. URL and text targets need a body hatch cannot write, so they are logged and skipped. |
 | `Options -Indexes` | A directory with no index file answers 403 instead of listing its contents. `+Indexes` restores the server default. Symlink and content-negotiation options (`FollowSymLinks`, `SymLinksIfOwnerMatch`, `MultiViews`) are accepted and left to the server. |
+| `DirectoryIndex` | Serves the first listed file that exists, e.g. `DirectoryIndex index.php index.html`; `disabled` turns it off. Only plain file names are accepted. |
 | `<Limit>`, `<LimitExcept>` | Access rules apply only to the listed HTTP methods (or to every method except them). |
 | `Satisfy Any\|All` | Combines host rules (`Order`/`Allow`/`Deny`) with `Require` rules using OR (`Any`) or AND (`All`). |
 | `AddDefaultCharset` | Adds a charset to the response `Content-Type` when the response has none; `Off` disables it. |
@@ -44,7 +45,7 @@ OpenLiteSpeed reads `RewriteRule` from `.htaccess` on its own, but ignores every
 
 `RequestHeader` cannot be implemented: LSIAPI can read a request header but has no call that changes one. The line is logged and skipped.
 
-Next (v0.2): Basic Auth (`AuthType`, `AuthUserFile`, `Require valid-user`), `DirectoryIndex`.
+Next (v0.2): Basic Auth (`AuthType`, `AuthUserFile`, `Require valid-user`).
 
 Unsupported directives are logged once per file change and skipped; they never break the site.
 

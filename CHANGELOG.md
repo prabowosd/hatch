@@ -4,6 +4,9 @@ Notable changes to hatch, newest first. Releases match the git tags; anything no
 
 ## [Unreleased]
 
+### Added
+- `DirectoryIndex`, serving the first listed file that exists (`DirectoryIndex index.php index.html`), with `disabled` to turn it off. `Options -Indexes` now counts the configured list too, so a folder with a custom index is not refused.
+
 ## [0.1.7] - 2026-10-28
 
 ### Added
