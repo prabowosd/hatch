@@ -123,6 +123,8 @@ pub struct Section {
     pub php: Php,
     pub errordocs: Vec<ErrorDocument>,
     pub options_indexes: Option<bool>,
+    /// `DirectoryIndex`: None leaves the server's own list alone, an empty list is `disabled`.
+    pub directory_index: Option<Vec<String>>,
     /// `AddDefaultCharset`: None unset, Some("") means Off, Some(s) is the charset.
     pub default_charset: Option<String>,
     pub ssl_require: bool,
@@ -149,6 +151,8 @@ pub struct Decision {
     pub errordocs: Vec<ErrorDocument>,
     /// `None` leaves the server's own directory listing setting alone.
     pub indexes: Option<bool>,
+    /// `None` leaves the server's own index file list alone; an empty list is `disabled`.
+    pub directory_index: Option<Vec<String>>,
     /// `None` leaves the response's content type alone; Some("") is AddDefaultCharset Off.
     pub default_charset: Option<String>,
     pub ssl_require: bool,
@@ -319,6 +323,7 @@ impl Compiler {
                     php: Php::default(),
                     errordocs: Vec::new(),
                     options_indexes: None,
+                    directory_index: None,
                     default_charset: None,
                     ssl_require: false,
                 });
@@ -342,6 +347,7 @@ impl Compiler {
                     php: Php::default(),
                     errordocs: Vec::new(),
                     options_indexes: None,
+                    directory_index: None,
                     default_charset: None,
                     ssl_require: false,
                 });
@@ -437,6 +443,7 @@ impl Compiler {
             }
             "errordocument" => self.error_document(args, line, s),
             "options" => self.options(args, line, s),
+            "directoryindex" => self.directory_index(args, line, s),
             "satisfy" => {
                 let value = args.first().map(|a| a.to_ascii_lowercase());
                 self.rules.sections[s].access.satisfy_any = match value.as_deref() {
@@ -587,6 +594,29 @@ impl Compiler {
         }
     }
 
+    /// `DirectoryIndex index.php index.html`, or `disabled` for none.
+    fn directory_index(&mut self, args: &[String], line: usize, s: usize) {
+        if args.is_empty() {
+            return self.note(line, "DirectoryIndex needs at least one file name");
+        }
+        if args.len() == 1 && args[0].eq_ignore_ascii_case("disabled") {
+            self.rules.sections[s].directory_index = Some(Vec::new());
+            return;
+        }
+        let mut names = Vec::new();
+        for name in args {
+            // Only a plain file name in this directory; Apache's local-URL form is not supported.
+            if value_ok(name) && !name.contains(['/', '\\']) && name != "." && name != ".." {
+                names.push(name.clone());
+            } else {
+                self.note(line, format!("DirectoryIndex {name:?} is not a plain file name, ignored"));
+            }
+        }
+        if !names.is_empty() {
+            self.rules.sections[s].directory_index = Some(names);
+        }
+    }
+
     /// `ErrorDocument <code> <path>`; URL and text targets need a body hatch cannot write.
     fn error_document(&mut self, args: &[String], line: usize, s: usize) {
         let (Some(code), Some(target)) = (args.first(), args.get(1)) else {
@@ -694,6 +724,7 @@ impl Rules {
             php: Php::default(),
             errordocs: Vec::new(),
             options_indexes: None,
+            directory_index: None,
             default_charset: None,
             ssl_require: false,
         };
@@ -868,6 +899,9 @@ pub fn decide(chain: &[&Rules], req: &Request) -> Decision {
             }
             if let Some(indexes) = section.options_indexes {
                 decision.indexes = Some(indexes);
+            }
+            if section.directory_index.is_some() {
+                decision.directory_index = section.directory_index.clone();
             }
             if section.default_charset.is_some() {
                 decision.default_charset = section.default_charset.clone();
@@ -1192,6 +1226,23 @@ mod tests {
         // An option hatch truly does not know is still reported.
         let unknown = rules("Options -Indexes -ExecCGI\n");
         assert_eq!(unknown.notes.len(), 1);
+    }
+
+    #[test]
+    fn directory_index_takes_a_list_and_the_deepest_file_wins() {
+        let root = rules("DirectoryIndex index.php index.html\n");
+        assert!(root.notes.is_empty(), "{:?}", root.notes);
+        assert_eq!(decide(&[&root], &plain("/", "", None)).directory_index, Some(vec!["index.php".into(), "index.html".into()]));
+        let child = rules("DirectoryIndex home.htm\n");
+        assert_eq!(decide(&[&root, &child], &plain("/", "", None)).directory_index, Some(vec!["home.htm".into()]));
+        // `disabled` is an empty list; unset stays None.
+        let off = rules("DirectoryIndex disabled\n");
+        assert_eq!(decide(&[&off], &plain("/", "", None)).directory_index, Some(Vec::new()));
+        assert_eq!(decide(&[&rules("Header set A b\n")], &plain("/", "", None)).directory_index, None);
+        // A path is not a file name in this directory, and an empty directive is reported.
+        let bad = rules("DirectoryIndex ../index.php\n");
+        assert_eq!(bad.notes.len(), 1);
+        assert_eq!(rules("DirectoryIndex\n").notes.len(), 1);
     }
 
     #[test]

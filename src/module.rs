@@ -226,9 +226,20 @@ unsafe extern "C" fn on_uri_map(param: *mut lsi_param_t) -> c_int {
         if errordoc {
             return LSI_RETCODE_LSI_OK as c_int;
         }
+        // DirectoryIndex: serve the first configured index file instead of the folder.
+        if let Some(files) = d.directory_index.as_deref() {
+            if let Some(target) = directory_index_target(api, s, files) {
+                // REWRITE keeps the query string, so /dir/?a=1 becomes /dir/index.php?a=1.
+                let ok = unsafe { (api.set_uri_qs)(s, LSI_URL_OP_LSI_URL_REWRITE as c_int, target.as_ptr() as *const c_char, target.len() as c_int, std::ptr::null(), 0) };
+                // A refused rewrite falls through, so -Indexes still refuses the listing.
+                if ok >= 0 {
+                    return LSI_RETCODE_LSI_OK as c_int;
+                }
+            }
+        }
         if d.indexes == Some(false) {
             // A directory with no index file would get a listing; Apache answers 403 instead.
-            if let Some(code) = deny_directory_listing(api, s) {
+            if let Some(code) = deny_directory_listing(api, s, d.directory_index.as_deref()) {
                 unsafe { (api.set_status_code)(s, code) };
                 return LSI_RETCODE_LSI_ERROR as c_int;
             }
@@ -237,17 +248,35 @@ unsafe extern "C" fn on_uri_map(param: *mut lsi_param_t) -> c_int {
     })
 }
 
-/// 403 when this request would produce a directory listing, otherwise None.
-fn deny_directory_listing(api: &Api, s: *const lsi_session_t) -> Option<c_int> {
+/// The directory a request for `/a/b/` names, with that URI path.
+fn request_dir(api: &Api, s: *const lsi_session_t) -> Option<(String, PathBuf)> {
     let uri = read(api.get_req_uri, s)?;
-    if !uri.ends_with('/') {
+    let path = uri.split(['?', '#']).next().unwrap_or("");
+    if !path.ends_with('/') {
         return None;
     }
     let root = doc_root(api, s)?;
-    let dir = file_path(api, s, &uri).filter(|p| !p.as_os_str().is_empty()).or_else(|| map_uri(&root, &uri))?;
+    let dir = file_path(api, s, path).filter(|p| !p.as_os_str().is_empty()).or_else(|| map_uri(&root, path))?;
+    dir.is_dir().then(|| (path.to_string(), dir))
+}
+
+/// DirectoryIndex: the first listed file that exists, as the URI to serve instead.
+fn directory_index_target(api: &Api, s: *const lsi_session_t, files: &[String]) -> Option<String> {
+    let (uri, dir) = request_dir(api, s)?;
+    let name = files.iter().find(|name| dir.join(name).is_file())?;
+    Some(format!("{uri}{name}"))
+}
+
+/// 403 when this request would produce a directory listing, otherwise None.
+fn deny_directory_listing(api: &Api, s: *const lsi_session_t, configured: Option<&[String]>) -> Option<c_int> {
+    // Apache's default when the .htaccess says nothing.
     const INDEX_FILES: [&str; 3] = ["index.html", "index.php", "index.htm"];
-    let has_index = INDEX_FILES.iter().any(|name| dir.join(name).is_file());
-    (!has_index && dir.is_dir()).then_some(403)
+    let (_, dir) = request_dir(api, s)?;
+    let has_index = match configured {
+        Some(files) => files.iter().any(|name| dir.join(name).is_file()),
+        None => INDEX_FILES.iter().any(|name| dir.join(name).is_file()),
+    };
+    (!has_index).then_some(403)
 }
 
 fn http_date(at: SystemTime) -> String {
