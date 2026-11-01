@@ -323,7 +323,11 @@ fn cache_path(raw: &str) -> String {
             parts.push(part);
         }
     }
-    if parts.is_empty() { "/".to_string() } else { format!("/{}", parts.join("/")) }
+    if parts.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{}", parts.join("/"))
+    }
 }
 
 fn cache_control_for(ops: &[CacheOp], uri: &str, max_expire: Option<u64>) -> Option<String> {
