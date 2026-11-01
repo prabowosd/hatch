@@ -105,6 +105,21 @@ pub struct Expires {
     pub by_type: Vec<(String, u64)>,
 }
 
+/// LiteSpeed Cache rules, mapped onto the `X-LiteSpeed-Cache-Control` response header.
+#[derive(Debug, Clone, Default)]
+struct Cache {
+    ops: Vec<CacheOp>,
+    max_expire: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum CacheOp {
+    /// `CacheEnable`: `true` is the public cache, `false` the private one.
+    Enable(bool, String),
+    /// `CacheDisable`; a type-qualified form still turns caching off for the response.
+    Disable(String),
+}
+
 #[derive(Debug, Clone)]
 enum FileMatch {
     Any,
@@ -119,6 +134,7 @@ pub struct Section {
     pub headers: Vec<HeaderOp>,
     access: Access,
     pub expires: Expires,
+    cache: Cache,
     pub env: Env,
     pub php: Php,
     pub errordocs: Vec<ErrorDocument>,
@@ -156,6 +172,8 @@ pub struct Decision {
     /// `None` leaves the response's content type alone; Some("") is AddDefaultCharset Off.
     pub default_charset: Option<String>,
     pub ssl_require: bool,
+    /// The `X-LiteSpeed-Cache-Control` value these rules prescribe, already composed.
+    pub cache_control: Option<String>,
 }
 
 const MAX_REGEX: usize = 1 << 20;
@@ -276,6 +294,53 @@ fn glob_to_regex(glob: &str) -> Option<String> {
     Some(out)
 }
 
+/// A cache URL prefix: absolute, no query, trailing slashes trimmed so `/a/` and `/a` are one scope.
+fn cache_prefix(value: &str) -> Option<String> {
+    if !value_ok(value) || !value.starts_with('/') || value.contains(['?', '#']) {
+        return None;
+    }
+    let trimmed = value.trim_end_matches('/');
+    Some(if trimmed.is_empty() { "/".to_string() } else { trimmed.to_string() })
+}
+
+/// `CacheEnable`/`CacheDisable` match a URL at or below the prefix.
+fn matches_prefix(uri: &str, prefix: &str) -> bool {
+    prefix == "/" || uri == prefix || (uri.starts_with(prefix) && uri[prefix.len()..].starts_with('/'))
+}
+
+/// The served path with dot segments resolved, mirroring map_uri, so a prefix scope
+/// cannot be bypassed with `//x` or `/./x` variants of the same request.
+fn cache_path(raw: &str) -> String {
+    let clean = raw.split(['?', '#']).next().unwrap_or("");
+    if !clean.starts_with('/') || clean.contains('\0') {
+        return clean.to_string();
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    for part in clean.split('/').filter(|p| !p.is_empty() && *p != ".") {
+        if part == ".." {
+            parts.pop();
+        } else {
+            parts.push(part);
+        }
+    }
+    if parts.is_empty() { "/".to_string() } else { format!("/{}", parts.join("/")) }
+}
+
+fn cache_control_for(ops: &[CacheOp], uri: &str, max_expire: Option<u64>) -> Option<String> {
+    let path = cache_path(uri);
+    let ttl = max_expire.unwrap_or(3600);
+    for op in ops.iter().rev() {
+        match op {
+            CacheOp::Enable(public, prefix) if matches_prefix(&path, prefix) => {
+                return Some(format!("{},max-age={ttl}", if *public { "public" } else { "private" }));
+            }
+            CacheOp::Disable(prefix) if matches_prefix(&path, prefix) => return Some("no-cache".to_string()),
+            _ => {}
+        }
+    }
+    None
+}
+
 struct Compiler {
     rules: Rules,
 }
@@ -319,6 +384,7 @@ impl Compiler {
                     headers: Vec::new(),
                     access: Access::default(),
                     expires: Expires::default(),
+                    cache: Cache::default(),
                     env: Env::default(),
                     php: Php::default(),
                     errordocs: Vec::new(),
@@ -343,6 +409,7 @@ impl Compiler {
                     headers: Vec::new(),
                     access: Access::default(),
                     expires: Expires::default(),
+                    cache: Cache::default(),
                     env: Env::default(),
                     php: Php::default(),
                     errordocs: Vec::new(),
@@ -397,6 +464,37 @@ impl Compiler {
                 }
                 _ => self.note(line, "ExpiresByType needs a MIME type and an expiry"),
             },
+            "cacheenable" => {
+                let (Some(kind), Some(prefix)) = (args.first(), args.get(1)) else {
+                    return self.note(line, "CacheEnable needs public or private and a URL prefix");
+                };
+                let public = match kind.to_ascii_lowercase().as_str() {
+                    "public" => true,
+                    "private" => false,
+                    _ => return self.note(line, "CacheEnable must be public or private"),
+                };
+                let Some(prefix) = cache_prefix(prefix) else {
+                    return self.note(line, "CacheEnable prefix must be an absolute path");
+                };
+                self.rules.sections[s].cache.ops.push(CacheOp::Enable(public, prefix));
+            }
+            "cachedisable" => {
+                let prefix = match args.first().map(|a| a.to_ascii_lowercase()) {
+                    Some(k) if k == "public" || k == "private" => args.get(1),
+                    Some(_) => args.first(),
+                    None => None,
+                };
+                let Some(prefix) = prefix.and_then(|p| cache_prefix(p)) else {
+                    return self.note(line, "CacheDisable prefix must be an absolute path");
+                };
+                self.rules.sections[s].cache.ops.push(CacheOp::Disable(prefix));
+            }
+            "cachemaxexpire" => {
+                let Some(secs) = args.first().and_then(|s| s.parse::<u64>().ok()).filter(|s| *s > 0) else {
+                    return self.note(line, "CacheMaxExpire needs a number of seconds");
+                };
+                self.rules.sections[s].cache.max_expire = Some(secs);
+            }
             "rewriteengine" | "rewriterule" | "rewritecond" | "rewritebase" | "rewriteoptions" => {}
             "setenv" => {
                 let Some(name) = args.first().filter(|n| env_name_ok(n)) else {
@@ -720,6 +818,7 @@ impl Rules {
             headers: Vec::new(),
             access: Access::default(),
             expires: Expires::default(),
+            cache: Cache::default(),
             env: Env::default(),
             php: Php::default(),
             errordocs: Vec::new(),
@@ -858,6 +957,7 @@ pub fn decide(chain: &[&Rules], req: &Request) -> Decision {
 
     let mut access: Option<&Access> = None;
     let mut env: Vec<(String, String)> = Vec::new();
+    let mut cache = Cache::default();
     for rules in chain {
         for section in &rules.sections {
             let applies = match &section.files {
@@ -924,8 +1024,14 @@ pub fn decide(chain: &[&Rules], req: &Request) -> Decision {
                 decision.expires.by_type.retain(|(m, _)| m != mime);
                 decision.expires.by_type.push((mime.clone(), *secs));
             }
+            let c = &section.cache;
+            cache.ops.extend(c.ops.iter().cloned());
+            if c.max_expire.is_some() {
+                cache.max_expire = c.max_expire;
+            }
         }
     }
+    decision.cache_control = cache_control_for(&cache.ops, req.uri, cache.max_expire);
     // A Header env= condition is checked against the environment the same request built.
     let applies = |env: &Option<(String, bool)>, built: &[(String, String)]| match env {
         None => true,
@@ -1281,5 +1387,58 @@ mod tests {
         let parent = rules("AddDefaultCharset UTF-8\n");
         let child = rules("AddDefaultCharset ISO-8859-1\n");
         assert_eq!(decide(&[&parent, &child], &plain("/", "", None)).default_charset, Some("ISO-8859-1".into()));
+    }
+
+    #[test]
+    fn cache_directives_build_the_header() {
+        let r = rules("CacheEnable public /\nCacheMaxExpire 600\nCacheDisable /private/\n");
+        assert!(r.notes.is_empty(), "{:?}", r.notes);
+        assert_eq!(decide(&[&r], &plain("/index.php?x=1", "", None)).cache_control, Some("public,max-age=600".into()));
+        assert_eq!(decide(&[&r], &plain("/private/x", "", None)).cache_control, Some("no-cache".into()));
+        // The default TTL when CacheMaxExpire is absent.
+        assert_eq!(decide(&[&rules("CacheEnable private /\n")], &plain("/", "", None)).cache_control, Some("private,max-age=3600".into()));
+    }
+
+    #[test]
+    fn cache_prefix_matches_a_path_scope_and_last_rule_wins() {
+        let cache = rules("CacheEnable public /\n");
+        let child = rules("CacheDisable /media/\nCacheEnable private /media/pub/\n");
+        assert_eq!(decide(&[&cache, &child], &plain("/media/x", "", None)).cache_control, Some("no-cache".into()));
+        assert_eq!(decide(&[&cache, &child], &plain("/media/pub/x", "", None)).cache_control, Some("private,max-age=3600".into()));
+        // A prefix is not a string prefix.
+        assert_eq!(decide(&[&rules("CacheEnable public /wp\n")], &plain("/wp-x", "", None)).cache_control, None);
+        assert_eq!(decide(&[&rules("CacheEnable public /wp\n")], &plain("/wp/x", "", None)).cache_control, Some("public,max-age=3600".into()));
+    }
+
+    #[test]
+    fn bad_cache_lines_are_reported_and_skipped() {
+        // Value: protects=cache parsing rejects malformed CacheEnable/CacheDisable/CacheMaxExpire lines (non-absolute or ?/# prefixes, zero/non-numeric expiry, bad kind); fails_when=any of those guards is removed so a malformed line silently changes the cache header; why_new=the earlier test covered bad kind and missing prefix only; seam=none; no_claim=unit only, end-to-end header emission is covered by tests/integration.sh
+        let r = rules("CacheEnable both /\nCacheEnable public X\nCacheDisable public\nCacheMaxExpire nope\nCacheMaxExpire 0\nCacheEnable public /a?b\nCacheEnable private /c#d\n");
+        assert_eq!(r.notes.len(), 7, "{:?}", r.notes);
+        assert_eq!(decide(&[&r], &plain("/", "", None)).cache_control, None);
+    }
+
+    #[test]
+    fn cachedisable_qualified_form_disables() {
+        let r = rules("CacheDisable public /x\nCacheDisable private /y\n");
+        assert!(r.notes.is_empty(), "{:?}", r.notes);
+        assert_eq!(decide(&[&r], &plain("/x/a", "", None)).cache_control, Some("no-cache".into()));
+        assert_eq!(decide(&[&r], &plain("/y", "", None)).cache_control, Some("no-cache".into()));
+        assert_eq!(decide(&[&r], &plain("/z", "", None)).cache_control, None);
+    }
+
+    #[test]
+    fn cache_prefix_cannot_be_evaded_by_dup_slashes_or_dots() {
+        let r = rules("CacheEnable public /\nCacheDisable /private/\n");
+        assert_eq!(decide(&[&r], &plain("//private/x", "", None)).cache_control, Some("no-cache".into()));
+        assert_eq!(decide(&[&r], &plain("/./private/x", "", None)).cache_control, Some("no-cache".into()));
+    }
+
+    #[test]
+    fn cachemaxexpire_uses_the_last_section_value() {
+        // Value: protects=a child .htaccess CacheMaxExpire overrides a parent TTL in the same chain; fails_when=decide() stops propagating max_expire so the child TTL is ignored; why_new=cache_directives_build_the_header covers a single section only; seam=none; no_claim=unit only, real multi-file chains are covered by tests/integration.sh
+        let parent = rules("CacheEnable public /\nCacheMaxExpire 600\n");
+        let child = rules("CacheMaxExpire 120\n");
+        assert_eq!(decide(&[&parent, &child], &plain("/", "", None)).cache_control, Some("public,max-age=120".into()));
     }
 }

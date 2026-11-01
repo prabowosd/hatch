@@ -311,6 +311,11 @@ fn remove_header(api: &Api, s: *const lsi_session_t, name: &str) {
     unsafe { (api.remove_resp_header)(s, LSI_RESP_HEADER_ID_LSI_RSPHDR_UNKNOWN, name.as_ptr() as *const c_char, name.len() as c_int) };
 }
 
+fn header_present(api: &Api, s: *const lsi_session_t, name: &str) -> bool {
+    let mut iov = iovec { iov_base: std::ptr::null_mut(), iov_len: 0 };
+    unsafe { (api.get_resp_header)(s, LSI_RESP_HEADER_ID_LSI_RSPHDR_UNKNOWN, name.as_ptr() as *const c_char, name.len() as c_int, &mut iov, 1) > 0 }
+}
+
 /// Like mod_expires: a dynamic response that set its own Cache-Control or Expires keeps it.
 /// Static files have no app behind them, so .htaccess may replace the server default.
 fn app_set_cache(api: &Api, s: *const lsi_session_t) -> bool {
@@ -453,6 +458,10 @@ unsafe extern "C" fn on_send_resp_header(param: *mut lsi_param_t) -> c_int {
         // served at URI_MAP, where the file path is known.
         if apply_status_errordocument(api, s, &d) {
             return LSI_RETCODE_LSI_OK as c_int;
+        }
+        // A backend's own cache controls win; hatch only fills in what was not set.
+        if let Some(control) = d.cache_control.as_deref().filter(|_| !app_set_cache(api, s) && !header_present(api, s, "X-LiteSpeed-Cache-Control")) {
+            set_header(api, s, "X-LiteSpeed-Cache-Control", control, LSI_HEADER_OP_LSI_HEADEROP_SET);
         }
         // mod_expires runs before mod_headers, so an explicit Header set Cache-Control wins.
         if let Some(secs) = d.expires.seconds_for(&content_type(api, s)).filter(|_| !app_set_cache(api, s)) {

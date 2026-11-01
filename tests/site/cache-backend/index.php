@@ -1,0 +1,1 @@
+<?php header('X-LiteSpeed-Cache-Control: private,max-age=7'); echo 'backend cache wins';
