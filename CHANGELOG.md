@@ -4,6 +4,11 @@ Notable changes to hatch, newest first. Releases match the git tags; anything no
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-11-02
+
+### Added
+- `CacheEnable`, `CacheDisable` and `CacheMaxExpire`, emitted as `X-LiteSpeed-Cache-Control`. A backend header already set wins over hatch, and cache scope matching runs on the normalized served path so a scoped disable cannot be evaded with `//x` or `/./x` variants.
+
 ## [0.1.8] - 2026-10-31
 
 ### Added
