@@ -1,0 +1,3 @@
+CacheEnable public /
+CacheMaxExpire 600
+CacheDisable /cache/private/

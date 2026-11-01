@@ -41,6 +41,7 @@ OpenLiteSpeed reads `RewriteRule` from `.htaccess` on its own, but ignores every
 | `<Files>`, `<Files ~>`, `<FilesMatch>` | Applied to the requested file name. |
 | `<IfModule>` | Contents apply; `<IfModule !...>` fallbacks are skipped. |
 | `ExpiresActive`, `ExpiresDefault`, `ExpiresByType` | `access plus N unit` and `A<seconds>` forms, `type/*` wildcards. Like mod_expires, a PHP or proxied response that sets its own `Cache-Control` or `Expires` keeps it; `Header set Cache-Control` still wins over expiry. |
+| `CacheEnable public\|private <path>`, `CacheDisable [public\|private] <path>`, `CacheMaxExpire <seconds>` | Emits `X-LiteSpeed-Cache-Control` so the LiteSpeed cache engine caches matching URLs (`public,max-age=N`, `private,max-age=N`, or `no-cache`). Paths are matched at or below the prefix; the last matching directory rule wins. A backend header already set wins, a backend that set its own `Cache-Control` or `Expires` keeps it, and `Header set X-LiteSpeed-Cache-Control` wins over the directives. |
 | `RewriteEngine`, `RewriteRule`, `RewriteCond`, `RewriteBase` | Left to OpenLiteSpeed, untouched. |
 
 `RequestHeader` cannot be implemented: LSIAPI can read a request header but has no call that changes one. The line is logged and skipped.
@@ -118,7 +119,7 @@ Use the `x86_64` or `aarch64` asset that matches the container. The image must u
 
 ## How it works
 
-- Hooks `URI_MAP` (redirects and access control) and `SEND_RESP_HEADER` (headers and expiry).
+- Hooks `URI_MAP` (redirects and access control) and `SEND_RESP_HEADER` (headers, expiry and LiteSpeed cache control).
 - For each request it walks from the docroot to the file's folder and merges every `.htaccess` on the way: headers accumulate from parent to child, the deepest access rules win, the deepest matching redirect wins.
 - Parsed files are cached per worker and re-read only when their mtime or size changes. Files over 256 KB are ignored.
 - Regexes use the `regex` crate, which runs in linear time, so a hostile pattern cannot stall a worker.

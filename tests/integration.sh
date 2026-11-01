@@ -86,6 +86,8 @@ check "Header unset"                     'x-hatch: root'                    "$(h
 check "child folder adds headers"        'x-hatch-hx: yes'                  "$(headers /hx/)"
 check "FilesMatch replaces Cache-Control" 'cache-control: max-age=99'       "$(headers /hx/a.css)"
 check "Expires by type"                  'cache-control: max-age=86400'     "$(headers /hx/i.png)"
+check "CacheEnable emits LiteSpeed cache control" 'x-litespeed-cache-control: public,max-age=600' "$(headers /cache/)"
+check "CacheDisable wins for a disabled path"      'x-litespeed-cache-control: no-cache'           "$(headers /cache/private/)"
 check "Files .env denied"                '403'                              "$(code /hx/.env)"
 check "Require ip denies other clients"  '403'                              "$(code /hx/deep/)"
 check "Redirect keeps the tail"          "301 $B/hx/x"                      "$(location /old/x)"
@@ -148,6 +150,10 @@ fi
 if [ "$(curl -s "$B/hx/plain.php")" = plain ]; then
   check "PHP keeps its own Cache-Control"  'cache-control: no-store, private' "$(headers /hx/nocache.php)"
   check "PHP without one gets the expiry" 'cache-control: max-age=2592000'   "$(headers /hx/plain.php)"
+  # Value: protects=a backend X-LiteSpeed-Cache-Control is not overwritten by CacheEnable; fails_when=the header_present guard is removed so a backend private value gets a public cache stamp; why_new=existing PHP checks cover Cache-Control, not the LiteSpeed cache header; seam=none; no_claim=real OLS backend only, static-file emission is the earlier check
+  check "backend LiteSpeed cache control wins" 'x-litespeed-cache-control: private,max-age=7' "$(headers /cache-backend/index.php)"
+  # Value: protects=a backend Cache-Control or Expires keeps its own cacheability instead of CacheEnable stamping public; fails_when=the app_set_cache guard is dropped from the cache emit so a private backend response gets a public cache stamp; why_new=the check above covers the X-LiteSpeed header, not plain Cache-Control; seam=none; no_claim=real OLS backend only
+  check "backend Cache-Control blocks CacheEnable" 'absent' "$(headers /cache-backend/private.php | grep -qi '^x-litespeed-cache-control:' && echo present || echo absent)"
 else
   echo "  skip  PHP checks (no PHP handler on this server)"
 fi
