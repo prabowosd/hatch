@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hatch · .htaccess compatibility for OpenLiteSpeed</title>
+<meta name="description" content="hatch loads into OpenLiteSpeed and applies Apache .htaccess directives (Header, Redirect, Require, FilesMatch, Expires, Cache control) per request. An open source module written in Rust.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="hatch">
+<meta property="og:title" content="hatch · .htaccess compatibility for OpenLiteSpeed">
+<meta property="og:description" content="Apache .htaccess directives applied per request in OpenLiteSpeed. Written in Rust.">
+<meta property="og:url" content="https://hatch.sdp.im/">
+<meta property="og:image" content="https://hatch.sdp.im/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="hatch logo: blue rounded square with a circular target, wordmark hatch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="hatch · .htaccess compatibility for OpenLiteSpeed">
+<meta name="twitter:description" content="Apache .htaccess directives applied per request in OpenLiteSpeed. Written in Rust.">
+<meta name="twitter:image" content="https://hatch.sdp.im/og.png">
+<meta name="theme-color" content="#0B1220">
+<link rel="icon" href="logo.svg" type="image/svg+xml">
+<link rel="canonical" href="https://hatch.sdp.im/">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,400;0,500;1,400&family=Geist:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0B1220;
+  --panel: #101C31;
+  --panel-2: #13233C;
+  --line: rgba(226, 232, 240, .13);
+  --line-strong: #33445F;
+  --text: #94A3B8;
+  --muted: #64748B;
+  --strong: #E2E8F0;
+  --code: #E2E8F0;
+  --accent: #0EA5E9;
+  --accent-2: #38BDF8;
+  --accent-deep: #1E3A8A;
+  --hl-key: #38BDF8;
+  --hl-str: #67E8F9;
+  --hl-fn: #93C5FD;
+  --hl-var: #7DD3FC;
+  --hl-c: #64748B;
+  --btn-bg: #E2E8F0;
+  --btn-fg: #0B1220;
+  --texture: #22324E;
+  --sans: "Geist", system-ui, sans-serif;
+  --mono: "DM Mono", ui-monospace, monospace;
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  --bg: #F1F6FB;
+  --panel: #FFFFFF;
+  --panel-2: #EDF3FA;
+  --line: rgba(11, 18, 32, .12);
+  --line-strong: #C7D6E8;
+  --text: #3F5369;
+  --muted: #64748B;
+  --strong: #0B1220;
+  --code: #17324F;
+  --accent: #0284C7;
+  --accent-2: #0EA5E9;
+  --accent-deep: #1E40AF;
+  --hl-key: #0369A1;
+  --hl-str: #0C77A0;
+  --hl-fn: #1D4ED8;
+  --hl-var: #0284C7;
+  --hl-c: #64748B;
+  --btn-bg: #0B1220;
+  --btn-fg: #F1F6FB;
+  --texture: #CAD8E9;
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 5.5rem; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 400 1rem/1.55 var(--sans); -webkit-font-smoothing: antialiased; }
+a { color: inherit; text-decoration: none; }
+:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 3px; }
+::selection { background: var(--accent); color: #fff; }
+code, pre, .mono { font-family: var(--mono); font-variant-ligatures: none; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 2rem; }
+
+/* Header */
+.site-head { position: sticky; top: 0; z-index: 50; backdrop-filter: blur(10px); background: color-mix(in srgb, var(--bg) 82%, transparent); border-bottom: 1px solid var(--line); }
+.site-head .wrap { display: flex; align-items: center; gap: 1.25rem; height: 4rem; }
+.brand { display: flex; align-items: center; gap: .65rem; color: var(--strong); font-weight: 700; font-size: 1.05rem; }
+.brand img { width: 30px; height: 30px; border-radius: 8px; }
+.site-head nav { display: flex; align-items: center; gap: 1.4rem; margin-left: auto; }
+.site-head nav a { color: var(--text); font-size: .95rem; }
+.site-head nav a:hover { color: var(--strong); }
+.theme-btn { display: inline-grid; place-items: center; width: 34px; height: 34px; border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 9px; cursor: pointer; }
+.theme-btn:hover { color: var(--strong); border-color: var(--line-strong); }
+.theme-btn svg { width: 17px; height: 17px; }
+.gh-btn { display: inline-flex; align-items: center; gap: .5rem; border: 1px solid var(--line); background: var(--panel); color: var(--strong); font-size: .9rem; font-weight: 500; padding: .5rem .9rem; border-radius: 9px; }
+.gh-btn:hover { border-color: var(--accent-2); }
+.gh-btn svg { width: 16px; height: 16px; }
+
+/* Hero */
+.hero { position: relative; overflow: hidden; border-bottom: 1px solid var(--line); }
+.hero::before { content: ""; position: absolute; inset: 0; background:
+  radial-gradient(800px 420px at 78% 12%, rgba(56, 189, 248, .14), transparent 60%),
+  radial-gradient(640px 360px at 8% 100%, rgba(30, 58, 138, .35), transparent 62%);
+  pointer-events: none; }
+.hero .wrap { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 3rem; align-items: center; padding-top: 5rem; padding-bottom: 5rem; }
+.kicker { display: flex; align-items: center; gap: .7rem; margin: 0 0 1.4rem; color: var(--accent-2); font-family: var(--mono); font-size: .78rem; letter-spacing: .16em; text-transform: uppercase; }
+.kicker::before { content: ""; width: 8px; height: 8px; border-radius: 2px; background: var(--accent); }
+.hero h1 { margin: 0 0 1.1rem; font: 800 clamp(2.5rem, 6vw, 4.4rem)/1.03 var(--sans); letter-spacing: -.04em; color: var(--strong); }
+.hero h1 .dot { color: var(--accent); }
+.hero .lede { max-width: 42rem; margin: 0 0 1.6rem; font-size: 1.15rem; line-height: 1.65; }
+.hero .lede b { color: var(--strong); font-weight: 600; }
+.hero .mark { position: relative; justify-self: end; width: 260px; height: 260px; }
+.hero .mark svg { width: 100%; height: 100%; filter: drop-shadow(0 18px 40px rgba(14, 165, 233, .35)); }
+.facts { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1.4rem 0 0; padding: 0; list-style: none; }
+.facts li { border: 1px solid var(--line); background: var(--panel); padding: .42rem .75rem; font-family: var(--mono); font-size: .8rem; color: var(--text); border-radius: 999px; }
+
+/* Terminal */
+.term { border: 1px solid var(--line); background: var(--panel); border-radius: 14px; overflow: hidden; max-width: 42rem; box-shadow: 0 20px 50px rgba(2, 8, 23, .35); }
+.term-head { display: flex; align-items: center; gap: .8rem; padding: .8rem 1.1rem; border-bottom: 1px solid var(--line); }
+.term-dots { display: flex; gap: 6px; }
+.term-dots i { width: 11px; height: 11px; border-radius: 50%; background: var(--line-strong); }
+.term-dots i:nth-child(1) { background: #FB7185; }
+.term-dots i:nth-child(2) { background: #FBBF24; }
+.term-dots i:nth-child(3) { background: #34D399; }
+.term-head .mono { color: var(--muted); font-size: .78rem; letter-spacing: .12em; text-transform: uppercase; }
+.term pre { margin: 0; padding: 1.15rem 1.3rem; overflow-x: auto; font-size: .9rem; line-height: 1.7; color: var(--code); }
+.term pre .p { color: var(--accent-2); }
+
+/* Copy button */
+.copy { border: 1px solid var(--line); background: var(--panel); color: var(--muted); font: 500 .78rem/1 var(--sans); padding: .4rem .7rem; border-radius: 7px; cursor: pointer; }
+.copy:hover { color: var(--strong); border-color: var(--line-strong); }
+
+/* Docs layout */
+.docs { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 4rem; padding-top: 1rem; padding-bottom: 8rem; }
+.toc { position: sticky; top: 5.5rem; align-self: start; padding-top: 4rem; }
+.toc .mono { display: block; margin-bottom: 1.1rem; color: var(--muted); font-size: .78rem; letter-spacing: .16em; text-transform: uppercase; }
+.toc ol { list-style: none; margin: 0; padding: 0; border-left: 1px solid var(--line-strong); }
+.toc a { display: block; padding: .45rem 0 .45rem 1rem; margin-left: -1px; border-left: 2px solid transparent; color: var(--text); font-size: .92rem; }
+.toc a:hover { color: var(--strong); }
+.toc a.active { color: var(--strong); border-left-color: var(--accent-2); }
+
+main { min-width: 0; }
+section { padding-top: 4rem; }
+section > .mono { display: block; margin-bottom: .9rem; color: var(--accent-2); font-size: .78rem; letter-spacing: .16em; text-transform: uppercase; }
+h2 { margin: 0 0 1.3rem; font: 700 2rem/1.15 var(--sans); letter-spacing: -.02em; color: var(--strong); }
+h3 { margin: 2.3rem 0 .8rem; font: 600 1.08rem/1.4 var(--sans); color: var(--strong); }
+p { margin: 0 0 1.1rem; font-size: 1.02rem; line-height: 1.7; max-width: 46rem; }
+p b, p strong { color: var(--strong); font-weight: 600; }
+:not(pre) > code { font-family: var(--mono); font-size: .9em; color: var(--code); }
+.inline-code { font-family: var(--mono); font-size: .9em; color: var(--code); background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: .12rem .4rem; }
+
+.block { border: 1px solid var(--line); background: var(--panel); border-radius: 12px; margin: 0 0 1.4rem; overflow: hidden; }
+.block-head { display: flex; align-items: center; gap: .8rem; padding: .9rem 1.2rem; border-bottom: 1px solid var(--line); }
+.block-head .mono { flex: 1; color: var(--muted); font-size: .78rem; letter-spacing: .16em; text-transform: uppercase; }
+.block pre { margin: 0; padding: 1.15rem 1.3rem; overflow-x: auto; font-size: .88rem; line-height: 1.75; color: var(--code); }
+.pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.pair > div:first-child { border-right: 1px solid var(--line); }
+.pair .block { border: 0; border-radius: 0; margin: 0; }
+
+/* Syntax tokens */
+.tok-k { color: var(--hl-key); }
+.tok-s { color: var(--hl-str); }
+.tok-f { color: var(--hl-fn); }
+.tok-v { color: var(--hl-var); }
+.tok-c { color: var(--hl-c); }
+
+/* Table */
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; margin: 0 0 1.4rem; }
+table { width: 100%; border-collapse: collapse; font-size: .93rem; }
+th { text-align: left; padding: .95rem 1.15rem; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: .76rem; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+td { padding: .95rem 1.15rem; border-bottom: 1px solid var(--line); vertical-align: top; line-height: 1.6; }
+tr:last-child td { border-bottom: 0; }
+td:first-child { color: var(--code); }
+td code { white-space: nowrap; }
+.matrix th:not(:first-child), .matrix td:not(:first-child) { text-align: center; }
+.matrix td { white-space: nowrap; }
+.ok { color: var(--strong); font-family: var(--mono); font-size: .82rem; }
+.ok::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-2); margin-right: .5rem; vertical-align: middle; }
+.na { color: var(--muted); font-family: var(--mono); font-size: .8rem; }
+.note { border: 1px solid var(--line); border-left: 3px solid var(--accent); background: var(--panel); border-radius: 10px; padding: 1rem 1.2rem; margin: 0 0 1.4rem; }
+.note p { margin: 0; }
+
+/* Footer */
+footer { border-top: 1px solid var(--line); }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 1rem; justify-content: space-between; padding-top: 2.25rem; padding-bottom: 3rem; }
+footer p { margin: 0; color: var(--muted); font-size: .9rem; max-width: 42rem; }
+footer a:hover { color: var(--strong); }
+.sponsor { display: inline-block; border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: .75rem 1.1rem; }
+.sponsor svg { display: block; width: 120px; }
+
+@media (max-width: 900px) {
+  .hero .wrap { grid-template-columns: 1fr; padding-top: 3.5rem; padding-bottom: 3.5rem; }
+  .hero .mark { display: none; }
+  .docs { grid-template-columns: 1fr; gap: 2rem; }
+  .toc { position: static; padding-top: 2rem; }
+  .site-head nav a:not(.theme-btn):not(.gh-btn) { display: none; }
+}
+</style>
+</head>
+<body>
+<header class="site-head">
+  <div class="wrap">
+    <a class="brand" href="#top"><img src="logo.svg" alt="hatch logo"><span>hatch</span></a>
+    <nav aria-label="Primary">
+      <a href="#install">Install</a>
+      <a href="#directives">Directives</a>
+      <a href="#build">Build</a>
+      <button class="theme-btn" id="theme-toggle" type="button" aria-label="Toggle theme">
+        <svg id="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path></svg>
+        <svg id="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg>
+      </button>
+      <a class="gh-btn" href="https://github.com/prabowosd/hatch" rel="noopener">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"></path></svg>
+        GitHub
+      </a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero" id="top">
+  <div class="wrap">
+    <div>
+      <p class="kicker">hatch · OpenLiteSpeed module</p>
+      <h1>Apache <code>.htaccess</code>,<br>on OpenLiteSpeed<span class="dot">.</span></h1>
+      <p class="lede">OpenLiteSpeed reads <b>RewriteRule</b> from <code>.htaccess</code> on its own, but ignores everything else: <b>Header</b>, <b>Redirect</b>, <b>Require</b>, <b>FilesMatch</b> and friends. hatch loads into OpenLiteSpeed and applies those directives per request, the way Apache does. Edits take effect on the next request; no restart.</p>
+      <div class="term">
+        <div class="term-head"><span class="term-dots"><i></i><i></i><i></i></span><span class="mono">terminal</span><button class="copy" type="button" data-copy="install-cmd">Copy</button></div>
+        <pre><span class="p">$</span> <span id="install-cmd">curl -fsSL https://raw.githubusercontent.com/prabowosd/hatch/main/install.sh | sudo bash</span></pre>
+      </div>
+      <ul class="facts">
+        <li>Rust</li>
+        <li>GPL-3.0</li>
+        <li>v0.1.9</li>
+        <li>glibc 2.34+</li>
+        <li>x86_64 + aarch64</li>
+      </ul>
+    </div>
+    <div class="mark" aria-hidden="true">
+      <svg viewBox="0 0 128 128" role="img" aria-label="hatch"><defs><linearGradient id="hm-bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0EA5E9"/><stop offset="1" stop-color="#1E3A8A"/></linearGradient></defs><rect x="4" y="4" width="120" height="120" rx="28" fill="url(#hm-bg)"/><circle cx="64" cy="64" r="52" fill="#E8F4FA"/><circle cx="64" cy="64" r="38" fill="#0B1220"/><circle cx="64" cy="64" r="31" fill="none" stroke="#38BDF8" stroke-width="2" opacity=".35"/><g stroke="#E8F4FA" stroke-width="5" stroke-linecap="round" fill="none"><circle cx="64" cy="64" r="20"/><line x1="64" y1="64" x2="78.14" y2="78.14"/><line x1="64" y1="64" x2="49.86" y2="78.14"/><line x1="64" y1="64" x2="49.86" y2="49.86"/><line x1="64" y1="64" x2="78.14" y2="49.86"/></g><circle cx="64" cy="64" r="6" fill="#38BDF8"/></svg>
+    </div>
+  </div>
+</div>
+
+<div class="wrap docs">
+  <aside class="toc" aria-label="On this page">
+    <span class="mono">On this page</span>
+    <ol>
+      <li><a href="#install">Install</a></li>
+      <li><a href="#directives">Directives</a></li>
+      <li><a href="#how">How it works</a></li>
+      <li><a href="#cyberpanel">CyberPanel</a></li>
+      <li><a href="#webuzo">Webuzo</a></li>
+      <li><a href="#docker">Docker</a></li>
+      <li><a href="#build">Build</a></li>
+      <li><a href="#test">Test</a></li>
+      <li><a href="#debugging">Troubleshooting</a></li>
+      <li><a href="#sponsors">License &amp; sponsors</a></li>
+    </ol>
+  </aside>
+
+  <main>
+    <section id="install">
+      <span class="mono">01 / Install</span>
+      <h2>Install</h2>
+      <p>The installer checks the architecture and glibc (2.34 or newer: RHEL/Alma/Rocky 9 and 10, Ubuntu 22.04+), verifies the release checksum, backs up <span class="inline-code">httpd_config.conf</span> and any previous module, adds the <span class="inline-code">module hatch</span> block, and does a graceful restart. If OpenLiteSpeed does not come back with hatch loaded, it restores the previous module and config on its own.</p>
+      <div class="block">
+        <div class="block-head"><span class="mono">Shell</span><button class="copy" type="button">Copy</button></div>
+        <pre><code>curl -fsSL https://raw.githubusercontent.com/prabowosd/hatch/main/install.sh | sudo bash</code></pre>
+      </div>
+      <div class="block">
+        <div class="block-head"><span class="mono">Shell · options</span><button class="copy" type="button">Copy</button></div>
+        <pre><code>sudo bash install.sh --file ./libhatch.so   <span class="tok-c"># install a local build</span>
+sudo bash install.sh --version v0.1.0       <span class="tok-c"># pin a release</span>
+sudo bash install.sh --no-guard             <span class="tok-c"># skip the Webuzo config guard</span>
+sudo bash install.sh --no-watch             <span class="tok-c"># skip the .htaccess watcher</span>
+sudo bash install.sh --status
+sudo bash install.sh --uninstall</code></pre>
+      </div>
+      <p>The config block that gets added:</p>
+      <div class="block">
+        <div class="block-head"><span class="mono">httpd_config.conf</span><button class="copy" type="button">Copy</button></div>
+        <pre><code>module hatch {
+  ls_enabled              1
+}</code></pre>
+      </div>
+    </section>
+
+    <section id="directives">
+      <span class="mono">02 / Directives</span>
+      <h2>Supported directives</h2>
+      <p><span class="inline-code">RequestHeader</span> cannot be implemented: LSIAPI can read a request header but has no call that changes one. The line is logged and skipped. The next release (v0.2) adds Basic Auth: <span class="inline-code">AuthType</span>, <span class="inline-code">AuthUserFile</span>, <span class="inline-code">Require valid-user</span>.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Directive</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><code>Header set|append|merge|add|edit|unset</code></td><td><code>always</code> and <code>onsuccess</code> accepted. <code>set</code> replaces values the server added itself; <code>edit</code> substitutes a pattern in the value already set, and <code>edit*</code> replaces every match. <code>env=name</code> and <code>env=!name</code> conditions apply; <code>expr=</code> is reported and ignored.</td></tr>
+            <tr><td><code>SetEnv</code>, <code>UnsetEnv</code></td><td>Sets and clears request environment variables, so the backend and the rewrite engine see them.</td></tr>
+            <tr><td><code>SetEnvIf</code>, <code>SetEnvIfNoCase</code>, <code>BrowserMatch</code>, <code>BrowserMatchNoCase</code></td><td>Matches a request header, <code>Request_URI</code>, <code>Request_Method</code>, <code>Remote_Addr</code>, <code>Remote_Host</code> or <code>Host</code>. <code>!var</code> and <code>var=value</code> are accepted.</td></tr>
+            <tr><td><code>php_value</code>, <code>php_admin_value</code>, <code>php_flag</code>, <code>php_admin_flag</code></td><td>Needs CyberPanel's OpenLiteSpeed core, whose API carries the php config calls. On other cores the line is logged once and skipped.</td></tr>
+            <tr><td><code>ErrorDocument</code></td><td>A path target, for a 404 and for a denied request, and for any other 4xx or 5xx the backend returns (<code>401</code>, <code>500</code>, <code>503</code>). The page is served through an internal redirect and keeps the original status. URL and text targets need a body hatch cannot write, so they are logged and skipped.</td></tr>
+            <tr><td><code>Options -Indexes</code></td><td>A directory with no index file answers 403 instead of listing its contents. <code>+Indexes</code> restores the server default. Symlink and content-negotiation options (<code>FollowSymLinks</code>, <code>SymLinksIfOwnerMatch</code>, <code>MultiViews</code>) are accepted and left to the server.</td></tr>
+            <tr><td><code>DirectoryIndex</code></td><td>Serves the first listed file that exists, e.g. <code>DirectoryIndex index.php index.html</code>; <code>disabled</code> turns it off. Only plain file names are accepted.</td></tr>
+            <tr><td><code>&lt;Limit&gt;</code>, <code>&lt;LimitExcept&gt;</code></td><td>Access rules apply only to the listed HTTP methods (or to every method except them).</td></tr>
+            <tr><td><code>Satisfy Any|All</code></td><td>Combines host rules (<code>Order</code>/<code>Allow</code>/<code>Deny</code>) with <code>Require</code> rules using OR (<code>Any</code>) or AND (<code>All</code>).</td></tr>
+            <tr><td><code>AddDefaultCharset</code></td><td>Adds a charset to the response <code>Content-Type</code> when the response has none; <code>Off</code> disables it.</td></tr>
+            <tr><td><code>SSLRequireSSL</code></td><td>Answers 403 when the request did not arrive over TLS.</td></tr>
+            <tr><td><code>Redirect</code>, <code>RedirectPermanent</code>, <code>RedirectTemp</code></td><td>Prefix match that keeps the rest of the path, like mod_alias. Status words <code>permanent</code>, <code>temp</code>, <code>seeother</code>, <code>gone</code>.</td></tr>
+            <tr><td><code>RedirectMatch</code></td><td>Regex with <code>$1</code>..<code>$9</code>. Targets must be a path or an <code>http(s)</code> URL.</td></tr>
+            <tr><td><code>Order</code>, <code>Allow from</code>, <code>Deny from</code></td><td>Apache 2.2 semantics, IPv4, IPv6, CIDR and partial addresses (<code>10.1</code>).</td></tr>
+            <tr><td><code>Require all granted|denied</code>, <code>Require ip</code>, <code>Require not ip</code></td><td>Apache 2.4 semantics.</td></tr>
+            <tr><td><code>&lt;Files&gt;</code>, <code>&lt;Files ~&gt;</code>, <code>&lt;FilesMatch&gt;</code></td><td>Applied to the requested file name.</td></tr>
+            <tr><td><code>&lt;IfModule&gt;</code></td><td>Contents apply; <code>&lt;IfModule !...&gt;</code> fallbacks are skipped.</td></tr>
+            <tr><td><code>ExpiresActive</code>, <code>ExpiresDefault</code>, <code>ExpiresByType</code></td><td><code>access plus N unit</code> and <code>A&lt;seconds&gt;</code> forms, <code>type/*</code> wildcards. Like mod_expires, a PHP or proxied response that sets its own <code>Cache-Control</code> or <code>Expires</code> keeps it; <code>Header set Cache-Control</code> still wins over expiry.</td></tr>
+            <tr><td><code>CacheEnable</code>, <code>CacheDisable</code>, <code>CacheMaxExpire</code></td><td>Emits <code>X-LiteSpeed-Cache-Control</code> so the LiteSpeed cache engine caches matching URLs (<code>public,max-age=N</code>, <code>private,max-age=N</code>, or <code>no-cache</code>). Paths are matched at or below the prefix; the last matching directory rule wins. A backend header already set wins, a backend that set its own <code>Cache-Control</code> or <code>Expires</code> keeps it, and <code>Header set X-LiteSpeed-Cache-Control</code> wins over the directives.</td></tr>
+            <tr><td><code>RewriteEngine</code>, <code>RewriteRule</code>, <code>RewriteCond</code>, <code>RewriteBase</code></td><td>Left to OpenLiteSpeed, untouched.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Unsupported directives are logged once per file change and skipped; they never break the site.</p>
+    </section>
+
+    <section id="how">
+      <span class="mono">03 / How it works</span>
+      <h2>How it works</h2>
+      <p>hatch hooks <span class="inline-code">URI_MAP</span> (redirects and access control) and <span class="inline-code">SEND_RESP_HEADER</span> (headers, expiry and LiteSpeed cache control). For each request it walks from the docroot to the file's folder and merges every <span class="inline-code">.htaccess</span> on the way: headers accumulate from parent to child, the deepest access rules win, the deepest matching redirect wins.</p>
+      <p>Parsed files are cached per worker and re-read only when their mtime or size changes. Files over 256 KB are ignored. Regexes use the <span class="inline-code">regex</span> crate, which runs in linear time, so a hostile pattern cannot stall a worker. Header names, values and redirect targets are validated; anything that could inject a header or a <span class="inline-code">javascript:</span> redirect is dropped. Every hook runs inside <span class="inline-code">catch_unwind</span> and fails open: a bug in hatch skips the <span class="inline-code">.htaccess</span> rules for that request instead of taking the server down.</p>
+      <p>The server's function table is read once per worker. CyberPanel's core has a longer <span class="inline-code">lsi_api_t</span>, so hatch picks the layout from the core's ABI marker first and falls back to scanning the server binary.</p>
+    </section>
+
+    <section id="cyberpanel">
+      <span class="mono">04 / CyberPanel</span>
+      <h2>CyberPanel</h2>
+      <p>CyberPanel is supported from v0.1.2. CyberPanel replaces OpenLiteSpeed with its own core (2.5.x) whose <span class="inline-code">lsi_api_t</span> carries three extra members; hatch detects that layout at load time. v0.1.1 and older crash the worker on the first request there, so upgrade before installing on a CyberPanel server.</p>
+      <p>hatch recognises the CyberPanel core by the <span class="inline-code">cyberpanel_lsi_api_abi_v1</span> symbol the core exports and reads the table with that layout. On a core with an unknown marker it logs one line and stays idle instead of guessing. The bundled <span class="inline-code">cyberpanel_ols</span> module needs a paid license and stays inert without one; hatch runs next to it.</p>
+    </section>
+
+    <section id="webuzo">
+      <span class="mono">05 / Webuzo</span>
+      <h2>Webuzo</h2>
+      <p>Webuzo 4.x runs a stock OpenLiteSpeed core, so hatch loads on it unchanged: there is no ABI marker to read and no special build. Its vhosts use <span class="inline-code">configFile</span> and <span class="inline-code">autoLoadHtaccess 1</span>, with document roots under <span class="inline-code">/home/&lt;user&gt;/&lt;domain&gt;/public</span>. hatch asks the server for the document root, so the <span class="inline-code">.htaccess</span> beside the site is found either way.</p>
+      <p>What differs is who owns the config. Webuzo writes <span class="inline-code">httpd_config.conf</span> and every vhost under <span class="inline-code">conf/webuzo_vh/</span> from its own state, on a certificate renewal, a domain or account change, and sometimes on its own service check, so a <span class="inline-code">module hatch</span> block added by hand can disappear. When the installer sees Webuzo (<span class="inline-code">/usr/local/webuzo</span> or <span class="inline-code">conf/webuzo_vh/</span>), it also installs <span class="inline-code">/usr/local/bin/hatch-guard</span> with a one-minute entry in <span class="inline-code">/etc/cron.d/hatch-guard</span>. The guard puts the block back and restarts OpenLiteSpeed only when Webuzo has removed it; a config that still has the block is left alone.</p>
+      <p><span class="inline-code">RewriteRule</span> is the one family OpenLiteSpeed keeps for itself: it parses <span class="inline-code">.htaccess</span> at config load and caches the rules, so a rewrite edit waits for a reload. Webuzo compensates with a two-minute cron that reloads when a <span class="inline-code">.htaccess</span> is newer than <span class="inline-code">cgid</span>; CyberPanel does the same every three minutes. On Webuzo the installer also adds <span class="inline-code">hatch-reload</span>, a systemd service that watches the document roots from <span class="inline-code">conf/webuzo_vh/</span> with <span class="inline-code">inotifywait</span>, ignores every file except <span class="inline-code">.htaccess</span>, debounces two seconds, and reloads at most once every ten seconds. Rewrite edits apply within seconds instead of minutes, and the service re-reads the vhost list every five minutes so new sites are covered. It needs <span class="inline-code">inotify-tools</span>.</p>
+      <p>The directives hatch handles itself (<span class="inline-code">Header</span>, <span class="inline-code">Redirect</span>, <span class="inline-code">Require</span>, <span class="inline-code">FilesMatch</span>, <span class="inline-code">Expires</span> and the rest) never wait for a reload: they are read from <span class="inline-code">.htaccess</span> on each request, so an edit applies to the next request.</p>
+      <p><span class="inline-code">php_value</span> and <span class="inline-code">php_flag</span> are logged and skipped on Webuzo's stock core, the same as on any OpenLiteSpeed build without CyberPanel's API. OpenLiteSpeed has no module API for per-request PHP configuration; <span class="inline-code">phpIniOverride</span> in a vhost or <span class="inline-code">context</span> block is the static alternative, and Webuzo keeps per-domain files for it under <span class="inline-code">/var/webuzo-data/openlitespeed/custom/</span>.</p>
+    </section>
+
+    <section id="docker">
+      <span class="mono">06 / Docker</span>
+      <h2>Docker</h2>
+      <p><span class="inline-code">install.sh</span> edits an OpenLiteSpeed installed on the host. For a container, mount the release <span class="inline-code">.so</span> and a config that enables it instead.</p>
+      <div class="block">
+        <div class="block-head"><span class="mono">compose.yaml</span><button class="copy" type="button">Copy</button></div>
+        <pre><code>services:
+  openlitespeed:
+    image: litespeedtech/openlitespeed:latest
+    volumes:
+      - ./hatch-x86_64-linux-gnu.so:/usr/local/lsws/modules/hatch.so:ro
+      - ./httpd_config.conf:/usr/local/lsws/conf/httpd_config.conf:ro</code></pre>
+      </div>
+      <p>Use the <span class="inline-code">x86_64</span> or <span class="inline-code">aarch64</span> asset that matches the container. The image must use glibc (the official OpenLiteSpeed images do); a musl/Alpine image cannot load the module.</p>
+    </section>
+
+    <section id="build">
+      <span class="mono">07 / Build</span>
+      <h2>Build from source</h2>
+      <p>The module links against OpenLiteSpeed's LSIAPI (<span class="inline-code">ols-api/</span>, GPLv3, from OpenLiteSpeed 1.8.3). Builds run in a container so the result matches the target glibc.</p>
+      <div class="block">
+        <div class="block-head"><span class="mono">Shell</span><button class="copy" type="button">Copy</button></div>
+        <pre><code>podman build -t hatch-build -f build/Containerfile build
+podman run --rm -v "$PWD":/src:Z hatch-build cargo build --release
+<span class="tok-c"># target/release/libhatch.so</span></code></pre>
+      </div>
+    </section>
+
+    <section id="test">
+      <span class="mono">08 / Test</span>
+      <h2>Test</h2>
+      <div class="block">
+        <div class="block-head"><span class="mono">Shell</span><button class="copy" type="button">Copy</button></div>
+        <pre><code>podman run --rm -v "$PWD":/src:Z hatch-build cargo test   <span class="tok-c"># unit tests</span>
+tests/integration.sh target/release/libhatch.so           <span class="tok-c"># real OpenLiteSpeed in a container</span>
+HATCH_CYBERPANEL=1 tests/integration.sh libhatch.so       <span class="tok-c"># CyberPanel's OpenLiteSpeed core (x86_64)</span>
+HATCH_LOCAL=1 tests/integration.sh libhatch.so            <span class="tok-c"># the OpenLiteSpeed installed on this host</span></code></pre>
+      </div>
+      <p>CI runs all of them on x86_64 and aarch64: OpenLiteSpeed 1.8 (official image), 1.9 on AlmaLinux 10 (LiteSpeed RPM), and CyberPanel's core built from <span class="inline-code">build/CyberPanelfile</span>.</p>
+    </section>
+
+    <section id="debugging">
+      <span class="mono">09 / Troubleshooting</span>
+      <h2>Troubleshooting</h2>
+      <p>When the module loads but a rule does not apply, create <span class="inline-code">/usr/local/lsws/conf/hatch.debug</span> and restart OpenLiteSpeed. hatch then logs, per request, what the server handed it: the URI, the doc root, the resolved file path and how many <span class="inline-code">.htaccess</span> files apply.</p>
+      <div class="block">
+        <div class="block-head"><span class="mono">Shell</span><button class="copy" type="button">Copy</button></div>
+        <pre><code>sudo touch /usr/local/lsws/conf/hatch.debug
+sudo /usr/local/lsws/bin/lswsctrl restart
+tail -f /usr/local/lsws/logs/error.log | grep '\[hatch\]'</code></pre>
+      </div>
+      <p>The check runs once per worker thread, so the restart is required after creating or removing the file. Entries are written at WARN level to the vhost error log, so an <span class="inline-code">errorlog</span> block with <span class="inline-code">logLevel ERROR</span> will suppress them. Remove the file and restart when done, since an active trace writes several lines per request.</p>
+    </section>
+
+    <section id="sponsors">
+      <span class="mono">10 / License &amp; sponsors</span>
+      <h2>License &amp; sponsors</h2>
+      <p>GPL-3.0-or-later, the same as OpenLiteSpeed. hatch is an independent project and is not affiliated with LiteSpeed Technologies or CyberPanel.</p>
+      <p><a href="https://kenari.id" rel="noopener">Kenari</a> sponsors hatch through its <a href="https://grant.kenari.id" rel="noopener">grant program</a> for two months, until December 2026.</p>
+    </section>
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    <p>hatch · Apache <code>.htaccess</code> compatibility for OpenLiteSpeed, written in Rust. GPL-3.0-or-later.</p>
+    <a class="sponsor" href="https://kenari.id" rel="noopener" aria-label="Kenari"><svg viewBox="0 0 200 60" role="img"><text x="0" y="38" font-family="Geist, sans-serif" font-size="26" font-weight="700" fill="currentColor">Kenari</text></svg></a>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  var toggle = document.getElementById('theme-toggle');
+  var sun = document.getElementById('icon-sun');
+  var moon = document.getElementById('icon-moon');
+
+  function setTheme(theme) {
+    root.setAttribute('data-theme', theme);
+    try { localStorage.setItem('hatch-theme', theme); } catch (e) {}
+    sun.style.display = theme === 'light' ? 'none' : 'block';
+    moon.style.display = theme === 'light' ? 'block' : 'none';
+  }
+
+  var stored = null;
+  try { stored = localStorage.getItem('hatch-theme'); } catch (e) {}
+  if (stored) { setTheme(stored); }
+  else {
+    var preferred = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    sun.style.display = preferred === 'light' ? 'none' : 'block';
+    moon.style.display = preferred === 'light' ? 'block' : 'none';
+  }
+
+  toggle.addEventListener('click', function () {
+    setTheme(root.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
+  });
+
+  document.querySelectorAll('.copy').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var target = btn.getAttribute('data-copy');
+      var text = target
+        ? document.getElementById(target).textContent
+        : btn.closest('.block').querySelector('pre').innerText;
+      navigator.clipboard.writeText(text).catch(function () {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+      });
+      var label = btn.textContent;
+      btn.textContent = 'Copied';
+      setTimeout(function () { btn.textContent = label; }, 1400);
+    });
+  });
+
+  var links = Array.prototype.slice.call(document.querySelectorAll('.toc a'));
+  var sections = links.map(function (a) { return document.querySelector(a.getAttribute('href')); });
+  var observer = new IntersectionObserver(function (entries) {
+    entries.forEach(function (entry) {
+      if (!entry.isIntersecting) return;
+      var id = '#' + entry.target.id;
+      links.forEach(function (a) { a.classList.toggle('active', a.getAttribute('href') === id); });
+    });
+  }, { rootMargin: '0px 0px -60% 0px' });
+  sections.forEach(function (s) { if (s) observer.observe(s); });
+})();
+</script>
+</body>
+</html>
