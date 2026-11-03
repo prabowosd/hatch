@@ -121,6 +121,29 @@ jobs:
       - name: Integration
         run: HATCH_LOCAL=1 bash tests/integration.sh hatch-${{ matrix.arch }}-linux-gnu.so
 
+  # The site is served from docs/ with no build step, so its version is written by hand in two
+  # places. Keep them honest: a release bump that forgets the page fails here instead of shipping
+  # a header and structured data that name an old version.
+  docs:
+    name: docs version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version matches Cargo.toml
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          if [ -z "$version" ]; then
+            echo "::error::no version in Cargo.toml"
+            exit 1
+          fi
+          stale=0
+          grep -qF "<span class=\"ver\">v$version</span>" docs/index.html \
+            || { echo "::error::docs/index.html header does not say v$version"; stale=1; }
+          grep -qF "\"softwareVersion\": \"$version\"" docs/index.html \
+            || { echo "::error::docs/index.html softwareVersion is not $version"; stale=1; }
+          exit "$stale"
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [integration, integration-el10, integration-cyberpanel]
