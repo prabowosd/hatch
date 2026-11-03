@@ -99,38 +99,20 @@ code, pre, .mono { font-family: var(--mono); font-variant-ligatures: none; }
 .gh-btn svg { width: 16px; height: 16px; }
 
 /* Hero */
-.hero { position: relative; overflow: hidden; border-bottom: 1px solid var(--line); }
-.hero::before { content: ""; position: absolute; inset: 0; background:
-  radial-gradient(800px 420px at 78% 12%, rgba(56, 189, 248, .14), transparent 60%),
-  radial-gradient(640px 360px at 8% 100%, rgba(30, 58, 138, .35), transparent 62%);
-  pointer-events: none; }
-.hero .wrap { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 3rem; align-items: center; padding-top: 5rem; padding-bottom: 5rem; }
-.kicker { display: flex; align-items: center; gap: .7rem; margin: 0 0 1.4rem; color: var(--accent-2); font-family: var(--mono); font-size: .78rem; letter-spacing: .16em; text-transform: uppercase; }
-.kicker::before { content: ""; width: 8px; height: 8px; border-radius: 2px; background: var(--accent); }
+.hero { border-bottom: 1px solid var(--line); }
+.hero .wrap { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 3rem; align-items: center; padding-top: 5rem; padding-bottom: 5rem; }
+
 .hero h1 { margin: 0 0 1.1rem; font: 800 clamp(2.5rem, 6vw, 4.4rem)/1.03 var(--sans); letter-spacing: -.04em; color: var(--strong); }
 .hero h1 .dot { color: var(--accent); }
 .hero .lede { max-width: 42rem; margin: 0 0 1.6rem; font-size: 1.15rem; line-height: 1.65; }
 .hero .lede b { color: var(--strong); font-weight: 600; }
 .hero .mark { position: relative; justify-self: end; width: 260px; height: 260px; }
-.hero .mark svg { width: 100%; height: 100%; filter: drop-shadow(0 18px 40px rgba(14, 165, 233, .35)); }
-.facts { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1.4rem 0 0; padding: 0; list-style: none; }
-.facts li { border: 1px solid var(--line); background: var(--panel); padding: .42rem .75rem; font-family: var(--mono); font-size: .8rem; color: var(--text); border-radius: 999px; }
+.hero .mark svg { width: 100%; height: 100%; }
 
-/* Terminal */
-.term { border: 1px solid var(--line); background: var(--panel); border-radius: 14px; overflow: hidden; max-width: 42rem; box-shadow: 0 20px 50px rgba(2, 8, 23, .35); }
-.term-head { display: flex; align-items: center; gap: .8rem; padding: .8rem 1.1rem; border-bottom: 1px solid var(--line); }
-.term-dots { display: flex; gap: 6px; }
-.term-dots i { width: 11px; height: 11px; border-radius: 50%; background: var(--line-strong); }
-.term-dots i:nth-child(1) { background: #FB7185; }
-.term-dots i:nth-child(2) { background: #FBBF24; }
-.term-dots i:nth-child(3) { background: #34D399; }
-.term-head .mono { color: var(--muted); font-size: .78rem; letter-spacing: .12em; text-transform: uppercase; }
-.term pre { margin: 0; padding: 1.15rem 1.3rem; overflow-x: auto; font-size: .9rem; line-height: 1.7; color: var(--code); }
-.term pre .p { color: var(--accent-2); }
 
-/* Copy button */
-.copy { border: 1px solid var(--line); background: var(--panel); color: var(--muted); font: 500 .78rem/1 var(--sans); padding: .4rem .7rem; border-radius: 7px; cursor: pointer; }
-.copy:hover { color: var(--strong); border-color: var(--line-strong); }
+
+
+
 
 /* Docs layout */
 .docs { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 4rem; padding-top: 1rem; padding-bottom: 8rem; }
@@ -143,7 +125,7 @@ code, pre, .mono { font-family: var(--mono); font-variant-ligatures: none; }
 
 main { min-width: 0; }
 section { padding-top: 4rem; }
-section > .mono { display: block; margin-bottom: .9rem; color: var(--accent-2); font-size: .78rem; letter-spacing: .16em; text-transform: uppercase; }
+
 h2 { margin: 0 0 1.3rem; font: 700 2rem/1.15 var(--sans); letter-spacing: -.02em; color: var(--strong); }
 h3 { margin: 2.3rem 0 .8rem; font: 600 1.08rem/1.4 var(--sans); color: var(--strong); }
 p { margin: 0 0 1.1rem; font-size: 1.02rem; line-height: 1.7; max-width: 46rem; }
@@ -222,20 +204,8 @@ footer a:hover { color: var(--strong); }
 <div class="hero" id="top">
   <div class="wrap">
     <div>
-      <p class="kicker">hatch · OpenLiteSpeed module</p>
       <h1>Apache <code>.htaccess</code>,<br>on OpenLiteSpeed<span class="dot">.</span></h1>
       <p class="lede">OpenLiteSpeed reads <b>RewriteRule</b> from <code>.htaccess</code> on its own, but ignores everything else: <b>Header</b>, <b>Redirect</b>, <b>Require</b>, <b>FilesMatch</b> and friends. hatch loads into OpenLiteSpeed and applies those directives per request, the way Apache does. Edits take effect on the next request; no restart.</p>
-      <div class="term">
-        <div class="term-head"><span class="term-dots"><i></i><i></i><i></i></span><span class="mono">terminal</span><button class="copy" type="button" data-copy="install-cmd">Copy</button></div>
-        <pre><span class="p">$</span> <span id="install-cmd">curl -fsSL https://raw.githubusercontent.com/prabowosd/hatch/main/install.sh | sudo bash</span></pre>
-      </div>
-      <ul class="facts">
-        <li>Rust</li>
-        <li>GPL-3.0</li>
-        <li>v0.1.9</li>
-        <li>glibc 2.34+</li>
-        <li>x86_64 + aarch64</li>
-      </ul>
     </div>
     <div class="mark" aria-hidden="true">
       <svg viewBox="0 0 128 128" role="img" aria-label="hatch"><defs><linearGradient id="hm-bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0EA5E9"/><stop offset="1" stop-color="#1E3A8A"/></linearGradient></defs><rect x="4" y="4" width="120" height="120" rx="28" fill="url(#hm-bg)"/><circle cx="64" cy="64" r="52" fill="#E8F4FA"/><circle cx="64" cy="64" r="38" fill="#0B1220"/><circle cx="64" cy="64" r="31" fill="none" stroke="#38BDF8" stroke-width="2" opacity=".35"/><g stroke="#E8F4FA" stroke-width="5" stroke-linecap="round" fill="none"><circle cx="64" cy="64" r="20"/><line x1="64" y1="64" x2="78.14" y2="78.14"/><line x1="64" y1="64" x2="49.86" y2="78.14"/><line x1="64" y1="64" x2="49.86" y2="49.86"/><line x1="64" y1="64" x2="78.14" y2="49.86"/></g><circle cx="64" cy="64" r="6" fill="#38BDF8"/></svg>
@@ -262,15 +232,15 @@ footer a:hover { color: var(--strong); }
 
   <main>
     <section id="install">
-      <span class="mono">01 / Install</span>
+      
       <h2>Install</h2>
       <p>The installer checks the architecture and glibc (2.34 or newer: RHEL/Alma/Rocky 9 and 10, Ubuntu 22.04+), verifies the release checksum, backs up <span class="inline-code">httpd_config.conf</span> and any previous module, adds the <span class="inline-code">module hatch</span> block, and does a graceful restart. If OpenLiteSpeed does not come back with hatch loaded, it restores the previous module and config on its own.</p>
       <div class="block">
-        <div class="block-head"><span class="mono">Shell</span><button class="copy" type="button">Copy</button></div>
+        <div class="block-head"><span class="mono">Shell</span></div>
         <pre><code>curl -fsSL https://raw.githubusercontent.com/prabowosd/hatch/main/install.sh | sudo bash</code></pre>
       </div>
       <div class="block">
-        <div class="block-head"><span class="mono">Shell · options</span><button class="copy" type="button">Copy</button></div>
+        <div class="block-head"><span class="mono">Shell · options</span></div>
         <pre><code>sudo bash install.sh --file ./libhatch.so   <span class="tok-c"># install a local build</span>
 sudo bash install.sh --version v0.1.0       <span class="tok-c"># pin a release</span>
 sudo bash install.sh --no-guard             <span class="tok-c"># skip the Webuzo config guard</span>
@@ -280,7 +250,7 @@ sudo bash install.sh --uninstall</code></pre>
       </div>
       <p>The config block that gets added:</p>
       <div class="block">
-        <div class="block-head"><span class="mono">httpd_config.conf</span><button class="copy" type="button">Copy</button></div>
+        <div class="block-head"><span class="mono">httpd_config.conf</span></div>
         <pre><code>module hatch {
   ls_enabled              1
 }</code></pre>
@@ -288,7 +258,7 @@ sudo bash install.sh --uninstall</code></pre>
     </section>
 
     <section id="directives">
-      <span class="mono">02 / Directives</span>
+      
       <h2>Supported directives</h2>
       <p><span class="inline-code">RequestHeader</span> cannot be implemented: LSIAPI can read a request header but has no call that changes one. The line is logged and skipped. The next release (v0.2) adds Basic Auth: <span class="inline-code">AuthType</span>, <span class="inline-code">AuthUserFile</span>, <span class="inline-code">Require valid-user</span>.</p>
       <div class="table-wrap">
@@ -322,7 +292,7 @@ sudo bash install.sh --uninstall</code></pre>
     </section>
 
     <section id="how">
-      <span class="mono">03 / How it works</span>
+      
       <h2>How it works</h2>
       <p>hatch hooks <span class="inline-code">URI_MAP</span> (redirects and access control) and <span class="inline-code">SEND_RESP_HEADER</span> (headers, expiry and LiteSpeed cache control). For each request it walks from the docroot to the file's folder and merges every <span class="inline-code">.htaccess</span> on the way: headers accumulate from parent to child, the deepest access rules win, the deepest matching redirect wins.</p>
       <p>Parsed files are cached per worker and re-read only when their mtime or size changes. Files over 256 KB are ignored. Regexes use the <span class="inline-code">regex</span> crate, which runs in linear time, so a hostile pattern cannot stall a worker. Header names, values and redirect targets are validated; anything that could inject a header or a <span class="inline-code">javascript:</span> redirect is dropped. Every hook runs inside <span class="inline-code">catch_unwind</span> and fails open: a bug in hatch skips the <span class="inline-code">.htaccess</span> rules for that request instead of taking the server down.</p>
@@ -330,14 +300,14 @@ sudo bash install.sh --uninstall</code></pre>
     </section>
 
     <section id="cyberpanel">
-      <span class="mono">04 / CyberPanel</span>
+      
       <h2>CyberPanel</h2>
       <p>CyberPanel is supported from v0.1.2. CyberPanel replaces OpenLiteSpeed with its own core (2.5.x) whose <span class="inline-code">lsi_api_t</span> carries three extra members; hatch detects that layout at load time. v0.1.1 and older crash the worker on the first request there, so upgrade before installing on a CyberPanel server.</p>
       <p>hatch recognises the CyberPanel core by the <span class="inline-code">cyberpanel_lsi_api_abi_v1</span> symbol the core exports and reads the table with that layout. On a core with an unknown marker it logs one line and stays idle instead of guessing. The bundled <span class="inline-code">cyberpanel_ols</span> module needs a paid license and stays inert without one; hatch runs next to it.</p>
     </section>
 
     <section id="webuzo">
-      <span class="mono">05 / Webuzo</span>
+      
       <h2>Webuzo</h2>
       <p>Webuzo 4.x runs a stock OpenLiteSpeed core, so hatch loads on it unchanged: there is no ABI marker to read and no special build. Its vhosts use <span class="inline-code">configFile</span> and <span class="inline-code">autoLoadHtaccess 1</span>, with document roots under <span class="inline-code">/home/&lt;user&gt;/&lt;domain&gt;/public</span>. hatch asks the server for the document root, so the <span class="inline-code">.htaccess</span> beside the site is found either way.</p>
       <p>What differs is who owns the config. Webuzo writes <span class="inline-code">httpd_config.conf</span> and every vhost under <span class="inline-code">conf/webuzo_vh/</span> from its own state, on a certificate renewal, a domain or account change, and sometimes on its own service check, so a <span class="inline-code">module hatch</span> block added by hand can disappear. When the installer sees Webuzo (<span class="inline-code">/usr/local/webuzo</span> or <span class="inline-code">conf/webuzo_vh/</span>), it also installs <span class="inline-code">/usr/local/bin/hatch-guard</span> with a one-minute entry in <span class="inline-code">/etc/cron.d/hatch-guard</span>. The guard puts the block back and restarts OpenLiteSpeed only when Webuzo has removed it; a config that still has the block is left alone.</p>
@@ -347,11 +317,11 @@ sudo bash install.sh --uninstall</code></pre>
     </section>
 
     <section id="docker">
-      <span class="mono">06 / Docker</span>
+      
       <h2>Docker</h2>
       <p><span class="inline-code">install.sh</span> edits an OpenLiteSpeed installed on the host. For a container, mount the release <span class="inline-code">.so</span> and a config that enables it instead.</p>
       <div class="block">
-        <div class="block-head"><span class="mono">compose.yaml</span><button class="copy" type="button">Copy</button></div>
+        <div class="block-head"><span class="mono">compose.yaml</span></div>
         <pre><code>services:
   openlitespeed:
     image: litespeedtech/openlitespeed:latest
@@ -363,11 +333,11 @@ sudo bash install.sh --uninstall</code></pre>
     </section>
 
     <section id="build">
-      <span class="mono">07 / Build</span>
+      
       <h2>Build from source</h2>
       <p>The module links against OpenLiteSpeed's LSIAPI (<span class="inline-code">ols-api/</span>, GPLv3, from OpenLiteSpeed 1.8.3). Builds run in a container so the result matches the target glibc.</p>
       <div class="block">
-        <div class="block-head"><span class="mono">Shell</span><button class="copy" type="button">Copy</button></div>
+        <div class="block-head"><span class="mono">Shell</span></div>
         <pre><code>podman build -t hatch-build -f build/Containerfile build
 podman run --rm -v "$PWD":/src:Z hatch-build cargo build --release
 <span class="tok-c"># target/release/libhatch.so</span></code></pre>
@@ -375,10 +345,10 @@ podman run --rm -v "$PWD":/src:Z hatch-build cargo build --release
     </section>
 
     <section id="test">
-      <span class="mono">08 / Test</span>
+      
       <h2>Test</h2>
       <div class="block">
-        <div class="block-head"><span class="mono">Shell</span><button class="copy" type="button">Copy</button></div>
+        <div class="block-head"><span class="mono">Shell</span></div>
         <pre><code>podman run --rm -v "$PWD":/src:Z hatch-build cargo test   <span class="tok-c"># unit tests</span>
 tests/integration.sh target/release/libhatch.so           <span class="tok-c"># real OpenLiteSpeed in a container</span>
 HATCH_CYBERPANEL=1 tests/integration.sh libhatch.so       <span class="tok-c"># CyberPanel's OpenLiteSpeed core (x86_64)</span>
@@ -388,11 +358,11 @@ HATCH_LOCAL=1 tests/integration.sh libhatch.so            <span class="tok-c"># 
     </section>
 
     <section id="debugging">
-      <span class="mono">09 / Troubleshooting</span>
+      
       <h2>Troubleshooting</h2>
       <p>When the module loads but a rule does not apply, create <span class="inline-code">/usr/local/lsws/conf/hatch.debug</span> and restart OpenLiteSpeed. hatch then logs, per request, what the server handed it: the URI, the doc root, the resolved file path and how many <span class="inline-code">.htaccess</span> files apply.</p>
       <div class="block">
-        <div class="block-head"><span class="mono">Shell</span><button class="copy" type="button">Copy</button></div>
+        <div class="block-head"><span class="mono">Shell</span></div>
         <pre><code>sudo touch /usr/local/lsws/conf/hatch.debug
 sudo /usr/local/lsws/bin/lswsctrl restart
 tail -f /usr/local/lsws/logs/error.log | grep '\[hatch\]'</code></pre>
@@ -401,7 +371,7 @@ tail -f /usr/local/lsws/logs/error.log | grep '\[hatch\]'</code></pre>
     </section>
 
     <section id="sponsors">
-      <span class="mono">10 / License &amp; sponsors</span>
+      
       <h2>License &amp; sponsors</h2>
       <p>GPL-3.0-or-later, the same as OpenLiteSpeed. hatch is an independent project and is not affiliated with LiteSpeed Technologies or CyberPanel.</p>
       <p><a href="https://kenari.id" rel="noopener">Kenari</a> sponsors hatch through its <a href="https://grant.kenari.id" rel="noopener">grant program</a> for two months, until December 2026.</p>
@@ -441,26 +411,6 @@ tail -f /usr/local/lsws/logs/error.log | grep '\[hatch\]'</code></pre>
 
   toggle.addEventListener('click', function () {
     setTheme(root.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
-  });
-
-  document.querySelectorAll('.copy').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      var target = btn.getAttribute('data-copy');
-      var text = target
-        ? document.getElementById(target).textContent
-        : btn.closest('.block').querySelector('pre').innerText;
-      navigator.clipboard.writeText(text).catch(function () {
-        var ta = document.createElement('textarea');
-        ta.value = text;
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        ta.remove();
-      });
-      var label = btn.textContent;
-      btn.textContent = 'Copied';
-      setTimeout(function () { btn.textContent = label; }, 1400);
-    });
   });
 
   var links = Array.prototype.slice.call(document.querySelectorAll('.toc a'));
