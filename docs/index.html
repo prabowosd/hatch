@@ -18,7 +18,7 @@
 <meta name="twitter:title" content="hatch · .htaccess compatibility for OpenLiteSpeed">
 <meta name="twitter:description" content="Apache .htaccess directives applied per request in OpenLiteSpeed. Written in Rust.">
 <meta name="twitter:image" content="https://hatch.sdp.im/og.png">
-<meta name="theme-color" content="#0B1220">
+<meta name="theme-color" content="#000000">
 <link rel="icon" href="logo.svg" type="image/svg+xml">
 <link rel="canonical" href="https://hatch.sdp.im/">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -26,7 +26,7 @@
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,400;0,500;1,400&family=Geist:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 :root {
-  --bg: #0B1220;
+  --bg: #000000;
   --panel: #101C31;
   --panel-2: #13233C;
   --line: rgba(226, 232, 240, .13);
@@ -170,7 +170,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 1rem; justify-content: space
 footer p { margin: 0; color: var(--muted); font-size: .9rem; max-width: 42rem; }
 footer a:hover { color: var(--strong); }
 .sponsor { display: inline-block; border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: .75rem 1.1rem; }
-.sponsor svg { display: block; width: 120px; }
+.sponsor img { display: block; width: 140px; height: auto; }
 
 @media (max-width: 900px) {
   .hero .wrap { grid-template-columns: 1fr; padding-top: 3.5rem; padding-bottom: 3.5rem; }
@@ -382,7 +382,7 @@ tail -f /usr/local/lsws/logs/error.log | grep '\[hatch\]'</code></pre>
 <footer>
   <div class="wrap">
     <p>hatch · Apache <code>.htaccess</code> compatibility for OpenLiteSpeed, written in Rust. GPL-3.0-or-later.</p>
-    <a class="sponsor" href="https://kenari.id" rel="noopener" aria-label="Kenari"><svg viewBox="0 0 200 60" role="img"><text x="0" y="38" font-family="Geist, sans-serif" font-size="26" font-weight="700" fill="currentColor">Kenari</text></svg></a>
+    <a class="sponsor" href="https://kenari.id" rel="noopener" aria-label="Kenari"><img src="kenari.svg" alt="kenari"></a>
   </div>
 </footer>
 
